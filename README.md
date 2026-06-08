@@ -1,8 +1,8 @@
 # Agent UI — Android
 
-A native Android client for controlling Claude Code agents, ported from the web
-front-end in `static/`. It talks to the same backend over the same protocol:
-REST for managing sessions and a WebSocket per session for the live transcript.
+A native Android client for controlling Claude Code agents. It talks to the
+backend over REST for managing sessions and a WebSocket per session for the
+live transcript.
 
 The build is fully containerized and CLI-driven — no JDK, Android SDK, or Gradle
 needed on the host. The only host dependency is `podman` (and `adb`, if you want
@@ -26,7 +26,6 @@ Makefile               build / shell / install targets (podman wrapper)
 build.gradle           root project — pins the Android Gradle Plugin version
 settings.gradle        project name + module list
 app/                   the application module
-static/                the original web front-end, kept as a protocol reference
 ```
 
 Key sources under `app/src/main/java/com/agentui/app/`:
