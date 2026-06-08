@@ -3,6 +3,10 @@ package com.agentui.app;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * Persistent app settings. The server address is stored in SharedPreferences so
  * it survives app restarts and device reboots — set it once in Settings.
@@ -12,6 +16,7 @@ final class Prefs {
     private static final String KEY_HOST = "server_host";
     private static final String KEY_PORT = "server_port";
     private static final String KEY_TLS  = "server_tls";
+    private static final String KEY_NOTIFY = "notify_sessions";
 
     private final SharedPreferences sp;
 
@@ -33,6 +38,28 @@ final class Prefs {
 
     boolean isConfigured() {
         return !host().trim().isEmpty();
+    }
+
+    /* ----------------------------------------------------------------- */
+    /* per-session notification opt-in                                   */
+    /* ----------------------------------------------------------------- */
+
+    /** Whether completion notifications are enabled for this session (default off). */
+    boolean notifyEnabled(String sessionId) {
+        return sessionId != null && notifySessions().contains(sessionId);
+    }
+
+    void setNotify(String sessionId, boolean enabled) {
+        if (sessionId == null) return;
+        // SharedPreferences may hand back a shared instance, so copy before mutating.
+        Set<String> set = new HashSet<>(notifySessions());
+        if (enabled) set.add(sessionId);
+        else set.remove(sessionId);
+        sp.edit().putStringSet(KEY_NOTIFY, set).apply();
+    }
+
+    private Set<String> notifySessions() {
+        return sp.getStringSet(KEY_NOTIFY, Collections.emptySet());
     }
 
     /** e.g. "192.168.1.50:8080" */

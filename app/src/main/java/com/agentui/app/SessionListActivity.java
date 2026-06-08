@@ -39,6 +39,15 @@ public class SessionListActivity extends Activity {
         api = new Api(this);
         prefs = api.prefs();
         setContentView(buildRoot());
+        maybeRequestNotificationPermission();
+    }
+
+    /** Notifications need a runtime grant on Android 13+. */
+    private void maybeRequestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return;
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
     }
 
     @Override

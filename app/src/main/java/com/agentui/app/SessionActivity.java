@@ -10,6 +10,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -38,12 +39,15 @@ public class SessionActivity extends Activity {
 
     private Api api;
     private String sessionId;
+    private String sessionName;
     private String status = "idle";
+    private boolean notifyOn;
 
     // views
     private LinearLayout transcript;
     private ScrollView scroll;
     private LinearLayout statusHolder;
+    private ImageView bellBtn;
     private TextView stopBtn;
     private TextView activity;
     private EditText input;
@@ -66,14 +70,28 @@ public class SessionActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         sessionId = getIntent().getStringExtra(EXTRA_ID);
-        String name = getIntent().getStringExtra(EXTRA_NAME);
+        sessionName = getIntent().getStringExtra(EXTRA_NAME);
         String dir = getIntent().getStringExtra(EXTRA_DIR);
         status = getIntent().getStringExtra(EXTRA_STATUS);
         if (status == null) status = "idle";
+        notifyOn = api.prefs().notifyEnabled(sessionId);
 
-        setContentView(buildRoot(name, dir));
+        setContentView(buildRoot(sessionName, dir));
         applyStatus(status);
         connect();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // While this session is on screen, suppress its completion notifications.
+        WatchService.setViewing(sessionId);
+    }
+
+    @Override
+    protected void onStop() {
+        WatchService.clearViewing(sessionId);
+        super.onStop();
     }
 
     @Override
@@ -118,6 +136,16 @@ public class SessionActivity extends Activity {
         Widgets.margins(dirView, 0, Theme.dp(this, 2), 0, 0);
         headings.addView(dirView);
         header.addView(headings);
+
+        bellBtn = new ImageView(this);
+        bellBtn.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int bellPad = Theme.dp(this, 10);
+        bellBtn.setPadding(bellPad, bellPad, bellPad, bellPad);
+        bellBtn.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
+        bellBtn.setClickable(true);
+        bellBtn.setOnClickListener(v -> toggleNotify());
+        header.addView(bellBtn);
+        updateBell();
 
         statusHolder = Widgets.row(this);
         Widgets.margins(statusHolder, Theme.dp(this, 8), 0, 0, 0);
@@ -202,12 +230,38 @@ public class SessionActivity extends Activity {
     /* status                                                           */
     /* ---------------------------------------------------------------- */
 
+    /* ---------------------------------------------------------------- */
+    /* notifications                                                    */
+    /* ---------------------------------------------------------------- */
+
+    private void toggleNotify() {
+        notifyOn = !notifyOn;
+        api.prefs().setNotify(sessionId, notifyOn);
+        updateBell();
+        if (notifyOn) {
+            // If a task is already in flight, start watching it right away.
+            if ("running".equals(status) || "awaiting_approval".equals(status)) {
+                WatchService.watch(this, sessionId, sessionName, status);
+            }
+        } else {
+            WatchService.unwatch(this, sessionId);
+        }
+    }
+
+    private void updateBell() {
+        bellBtn.setImageResource(notifyOn ? R.drawable.ic_bell : R.drawable.ic_bell_off);
+        bellBtn.setColorFilter(notifyOn ? Theme.INK : Theme.FAINT);
+    }
+
     private void applyStatus(String s) {
         status = s;
         statusHolder.removeAllViews();
         statusHolder.addView(Widgets.statusBadge(this, s));
 
         boolean busy = "running".equals(s) || "awaiting_approval".equals(s);
+        if (busy && notifyOn) {
+            WatchService.watch(this, sessionId, sessionName, s);
+        }
         input.setEnabled(!busy);
         sendBtn.setEnabled(!busy);
         sendBtn.setAlpha(busy ? 0.4f : 1f);
