@@ -1,0 +1,23 @@
+<resources>
+    <!-- Mirrors the CSS custom properties from the web front-end. -->
+    <color name="bg">#FF100F12</color>
+    <color name="panel">#FF1A1820</color>
+    <color name="panel2">#FF221F2A</color>
+    <color name="panel_hover">#FF262230</color>
+    <color name="line">#FF2C2935</color>
+    <color name="line_soft">#FF232029</color>
+
+    <color name="ink">#FFECE8F0</color>
+    <color name="muted">#FF9893A6</color>
+    <color name="faint">#FF6F6A7D</color>
+
+    <color name="accent">#FFD97757</color>
+    <color name="accent_strong">#FFE0875F</color>
+    <color name="accent_press">#FFC25F3F</color>
+
+    <color name="idle">#FF8B8696</color>
+    <color name="running">#FF4ECF9E</color>
+    <color name="awaiting">#FFE8B14C</color>
+    <color name="danger">#FFEF6F63</color>
+    <color name="info">#FF7EA7E0</color>
+</resources>

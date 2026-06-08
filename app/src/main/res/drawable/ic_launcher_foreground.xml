@@ -4,23 +4,21 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- White placeholder circle (within the adaptive-icon safe zone) -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M24,54 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0 z" />
+    <!-- Agent UI brand mark: the accent "status dot" with its soft glow ring,
+         the same motif used before the wordmark in the web front-end. -->
 
-    <!-- Placeholder letter "A" drawn as strokes -->
+    <!-- Outer glow ring (accent at low opacity). -->
     <path
-        android:strokeColor="#37474F"
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:fillColor="#00000000"
-        android:pathData="M46,68 L54,40 L62,68" />
+        android:fillColor="#24D97757"
+        android:pathData="M54,30 a24,24 0 1,0 0.001,0 z" />
+
+    <!-- Mid ring. -->
     <path
-        android:strokeColor="#37474F"
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000"
-        android:pathData="M49,58 L59,58" />
+        android:fillColor="#40D97757"
+        android:pathData="M54,38 a16,16 0 1,0 0.001,0 z" />
+
+    <!-- Solid accent core. -->
+    <path
+        android:fillColor="#D97757"
+        android:pathData="M54,44 a10,10 0 1,0 0.001,0 z" />
 </vector>

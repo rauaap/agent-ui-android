@@ -1,9 +1,22 @@
-# Android container build template
+# Agent UI — Android
 
-A minimal Android app skeleton with a fully containerized, CLI-driven Gradle
-build. No JDK, Android SDK, or Gradle needed on the host — everything runs
-inside a podman container defined by the `Containerfile`. The only host
-dependency is `podman` (and `adb`, if you want to install on a device).
+A native Android client for controlling Claude Code agents, ported from the web
+front-end in `static/`. It talks to the same backend over the same protocol:
+REST for managing sessions and a WebSocket per session for the live transcript.
+
+The build is fully containerized and CLI-driven — no JDK, Android SDK, or Gradle
+needed on the host. The only host dependency is `podman` (and `adb`, if you want
+to install on a device).
+
+## Features
+
+- **Session list** — create, open, and delete agent sessions.
+- **Live transcript** — streamed agent output, collapsible tool-use cards, and
+  inline approval prompts (Allow / Deny) over a WebSocket that auto-reconnects.
+- **Composer** — send prompts; input locks while the agent is running.
+- **Settings** — the server host / port (and optional TLS) are stored in
+  `SharedPreferences`, so the address **persists across app restarts and device
+  reboots**. Set it once via the ⚙ button on the session list.
 
 ## Layout
 
@@ -12,8 +25,21 @@ Containerfile          Fedora + JDK 21 + Android SDK + Gradle toolchain
 Makefile               build / shell / install targets (podman wrapper)
 build.gradle           root project — pins the Android Gradle Plugin version
 settings.gradle        project name + module list
-app/                   the application module (one-activity skeleton)
+app/                   the application module
+static/                the original web front-end, kept as a protocol reference
 ```
+
+Key sources under `app/src/main/java/com/agentui/app/`:
+
+| File | Role |
+|------|------|
+| `SessionListActivity.java` | launcher screen: list / create / delete sessions |
+| `SessionActivity.java`     | per-session transcript + composer + WebSocket |
+| `SettingsActivity.java`    | server address form (persisted) |
+| `Prefs.java`               | `SharedPreferences`-backed server config |
+| `Api.java`                 | OkHttp REST client for `/sessions` endpoints |
+| `Session.java`             | session model |
+| `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 
 ## Build
 
@@ -52,21 +78,29 @@ sudo dnf install android-tools     # Fedora
 make install                       # adb install -r the debug APK
 ```
 
-## Starting a new app from this template
+On first launch, open Settings (⚙) and enter the host / IP and port of your
+agent backend.
 
-Replace each placeholder value below. The package id (`com.example.app`) must be
-changed in all four of its locations together — `namespace`, `applicationId`, the
-source directory, and the `package` declaration.
+## Backend protocol
 
-| Placeholder | Value | Where |
-|-------------|-------|-------|
-| Package id | `com.example.app` | `app/build.gradle` (`namespace` + `applicationId`), source dir `app/src/main/java/com/example/app/`, `package` line in `MainActivity.java` |
-| Project name | `AndroidApp` | `settings.gradle` (`rootProject.name`) |
-| App label | `AndroidApp` | `app/src/main/res/values/strings.xml` (`app_name`) |
-| Image / cache names | `android-builder`, `android-gradle-cache` | `Makefile` (`IMAGE`, `GRADLE_CACHE`) — optional |
-| Launcher icon | placeholder "A" art | `app/src/main/res/drawable/ic_launcher_foreground.xml` |
+REST: `GET /sessions`, `POST /sessions`, `DELETE /sessions/{id}`,
+`POST /sessions/{id}/stop`.
 
-Bump SDK / build-tools / Gradle versions in the `Containerfile` `ARG`s if needed.
+WebSocket: `ws(s)://<host>/ws/sessions/{id}`
+
+```
+client -> server : { type: "input", text }
+                   { type: "approval_response", request_id, behavior }
+
+server -> client : { type: "status",           status }   # idle | running | awaiting_approval
+                   { type: "input",            text }
+                   { type: "output",           text }
+                   { type: "tool_use",         tool, input }
+                   { type: "approval_request", request_id, tool, input }
+                   { type: "approval_response", request_id, behavior }
+                   { type: "done" }
+                   { type: "error",            message }
+```
 
 ## Notes
 
@@ -75,3 +109,5 @@ Bump SDK / build-tools / Gradle versions in the `Containerfile` `ARG`s if needed
   `make`, not on the host.
 - SDK level, build-tools, and Gradle versions are all `ARG`s at the top of the
   `Containerfile` — change them in one place.
+- Cleartext HTTP is enabled (`usesCleartextTraffic`) so plain `http://` LAN
+  backends work; flip the TLS switch in Settings for `https`/`wss`.
