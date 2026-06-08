@@ -129,7 +129,10 @@ public class SessionActivity extends Activity {
 
         LinearLayout headings = Widgets.column(this);
         headings.setLayoutParams(lp(0, WRAP, 1f));
-        headings.addView(Widgets.text(this, name == null ? "" : name, Theme.INK, 17, true));
+        TextView nameView = Widgets.text(this, name == null ? "" : name, Theme.INK, 17, true);
+        nameView.setMaxLines(1);
+        nameView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        headings.addView(nameView);
         TextView dirView = Widgets.mono(this, dir == null ? "" : dir, Theme.FAINT, 12);
         dirView.setMaxLines(1);
         dirView.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
