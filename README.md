@@ -10,13 +10,19 @@ to install on a device).
 
 ## Features
 
-- **Session list** — create, open, and delete agent sessions.
+- **Session list** — create, open, and delete agent sessions. New sessions take
+  a name and a working directory; the directory is pre-filled from a configurable
+  default and tracks the name as you type until you edit it by hand.
 - **Live transcript** — streamed agent output, collapsible tool-use cards, and
   inline approval prompts (Allow / Deny) over a WebSocket that auto-reconnects.
 - **Composer** — send prompts; input locks while the agent is running.
-- **Settings** — the server host / port (and optional TLS) are stored in
-  `SharedPreferences`, so the address **persists across app restarts and device
-  reboots**. Set it once via the ⚙ button on the session list.
+- **Background notifications** — toggle the bell on a session to watch it from a
+  foreground service. You get a high-priority notification when the task finishes
+  or needs your approval, even with the app off-screen; the watch stops once the
+  turn ends and is silent for whichever session you're currently viewing.
+- **Settings** — the server host / port (and optional TLS) plus a default working
+  directory are stored in `SharedPreferences`, so they **persist across app
+  restarts and device reboots**. Set them via the ⚙ button on the session list.
 
 ## Layout
 
@@ -34,7 +40,8 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 |------|------|
 | `SessionListActivity.java` | launcher screen: list / create / delete sessions |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
-| `SettingsActivity.java`    | server address form (persisted) |
+| `SettingsActivity.java`    | server address + default working directory form (persisted) |
+| `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
 | `Api.java`                 | OkHttp REST client for `/sessions` endpoints |
 | `Session.java`             | session model |
@@ -84,6 +91,8 @@ agent backend.
 
 REST: `GET /sessions`, `POST /sessions`, `DELETE /sessions/{id}`,
 `POST /sessions/{id}/stop`.
+
+`POST /sessions` body: `{ name, working_dir, agent }`.
 
 WebSocket: `ws(s)://<host>/ws/sessions/{id}`
 
