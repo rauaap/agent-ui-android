@@ -17,6 +17,9 @@ final class Prefs {
     private static final String KEY_PORT = "server_port";
     private static final String KEY_TLS  = "server_tls";
     private static final String KEY_NOTIFY = "notify_sessions";
+    private static final String KEY_DEFAULT_DIR = "default_working_dir";
+
+    private static final String DEFAULT_DIR = "/projects/";
 
     private final SharedPreferences sp;
 
@@ -28,11 +31,15 @@ final class Prefs {
     int port() { return sp.getInt(KEY_PORT, 8080); }
     boolean tls() { return sp.getBoolean(KEY_TLS, false); }
 
-    void save(String host, int port, boolean tls) {
+    /** Pre-filled into the working-directory field when creating a session. */
+    String defaultDir() { return sp.getString(KEY_DEFAULT_DIR, DEFAULT_DIR); }
+
+    void save(String host, int port, boolean tls, String defaultDir) {
         sp.edit()
                 .putString(KEY_HOST, host.trim())
                 .putInt(KEY_PORT, port)
                 .putBoolean(KEY_TLS, tls)
+                .putString(KEY_DEFAULT_DIR, defaultDir.trim())
                 .apply();
     }
 

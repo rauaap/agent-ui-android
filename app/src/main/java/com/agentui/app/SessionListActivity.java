@@ -270,8 +270,32 @@ public class SessionListActivity extends Activity {
         content.addView(spacer(14));
         content.addView(fieldLabel("Working directory"));
         EditText dirField = field("/projects/", InputType.TYPE_CLASS_TEXT, true);
-        dirField.setText("/projects/");
+        dirField.setText(prefs.defaultDir());
         content.addView(dirField);
+
+        // Live-append the name onto the default directory as it's typed, until
+        // the user takes manual control of the directory field.
+        final boolean[] dirEdited = {false};
+        final boolean[] programmatic = {false};
+        dirField.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                if (!programmatic[0]) dirEdited[0] = true;
+            }
+            @Override public void afterTextChanged(android.text.Editable s) {}
+        });
+        nameField.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                if (dirEdited[0]) return;
+                programmatic[0] = true;
+                String dir = prefs.defaultDir() + s.toString();
+                dirField.setText(dir);
+                dirField.setSelection(dir.length());
+                programmatic[0] = false;
+            }
+            @Override public void afterTextChanged(android.text.Editable s) {}
+        });
 
         content.addView(spacer(14));
         content.addView(fieldLabel("Agent"));

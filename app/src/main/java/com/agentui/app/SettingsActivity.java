@@ -29,6 +29,7 @@ public class SettingsActivity extends Activity {
     private EditText hostField;
     private EditText portField;
     private Switch tlsSwitch;
+    private EditText defaultDirField;
     private TextView preview;
 
     @Override
@@ -104,6 +105,22 @@ public class SettingsActivity extends Activity {
         preview.setLayoutParams(lp(MATCH, WRAP));
         form.addView(preview);
 
+        form.addView(spacer(28));
+        TextView sessionSection = Widgets.text(this, "Sessions", Theme.ACCENT_STRONG, 12, true);
+        sessionSection.setAllCaps(true);
+        sessionSection.setLetterSpacing(0.06f);
+        form.addView(sessionSection);
+        form.addView(spacer(12));
+
+        form.addView(label("Default working directory"));
+        defaultDirField = field(prefs.defaultDir(), "/projects/", InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_URI, true);
+        form.addView(defaultDirField);
+        TextView dirHint = Widgets.text(this,
+                "Pre-filled when you create a new session.", Theme.MUTED, 12.5f, false);
+        Widgets.margins(dirHint, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(dirHint);
+
         form.addView(spacer(24));
         TextView save = Widgets.primaryButton(this, "Save");
         save.setMinimumHeight(Theme.dp(this, 48));
@@ -157,7 +174,7 @@ public class SettingsActivity extends Activity {
             toast("Enter a valid port (1–65535)");
             return;
         }
-        prefs.save(host, port, tlsSwitch.isChecked());
+        prefs.save(host, port, tlsSwitch.isChecked(), defaultDirField.getText().toString());
         toast("Saved");
         finish();
     }
