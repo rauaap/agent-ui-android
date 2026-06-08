@@ -1,11 +1,14 @@
 package com.agentui.app;
 
 import android.content.Context;
+import android.graphics.Insets;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -110,6 +113,34 @@ final class Widgets {
 
     static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+
+    /**
+     * Pad a full-screen root for the system bars (status/navigation) and the
+     * on-screen keyboard. With targetSdk 35+ the window draws edge-to-edge and
+     * {@code adjustResize} no longer reflows the layout, so we consume the
+     * insets ourselves: the top inset keeps the header clear of the status bar,
+     * and the IME inset lifts the composer above the keyboard.
+     */
+    static void fitSystemWindows(View root) {
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            int left, top, right, bottom;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
+                left = bars.left;
+                top = bars.top;
+                right = bars.right;
+                bottom = bars.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft();
+                top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            v.setPadding(left, top, right, bottom);
+            return insets;
+        });
+    }
 
     static void margins(View v, int l, int t, int r, int b) {
         ViewGroup.LayoutParams base = v.getLayoutParams();

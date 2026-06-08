@@ -95,6 +95,7 @@ public class SessionActivity extends Activity {
         LinearLayout root = Widgets.column(this);
         root.setBackgroundColor(Theme.BG);
         root.setLayoutParams(lp(MATCH, MATCH));
+        Widgets.fitSystemWindows(root);
 
         // ---- header ----
         LinearLayout header = Widgets.row(this);

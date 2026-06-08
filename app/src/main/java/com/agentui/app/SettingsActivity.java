@@ -43,6 +43,7 @@ public class SettingsActivity extends Activity {
         LinearLayout root = Widgets.column(this);
         root.setBackgroundColor(Theme.BG);
         root.setLayoutParams(lp(MATCH, MATCH));
+        Widgets.fitSystemWindows(root);
 
         // ---- header with back ----
         LinearLayout header = Widgets.row(this);
