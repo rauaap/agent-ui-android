@@ -299,12 +299,22 @@ public class SessionListActivity extends Activity {
 
         content.addView(spacer(14));
         content.addView(fieldLabel("Agent"));
-        TextView agent = Widgets.text(this, "Claude Code", Theme.INK, 15, false);
+        final int[] agentIdx = {0};
+        TextView agent = Widgets.text(this, AGENT_LABELS[agentIdx[0]], Theme.INK, 15, false);
         agent.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
         int fp = Theme.dp(this, 12);
         agent.setPadding(fp, 0, fp, 0);
         agent.setGravity(Gravity.CENTER_VERTICAL);
         agent.setMinimumHeight(Theme.dp(this, 44));
+        agent.setOnClickListener(av -> new AlertDialog.Builder(this)
+                .setTitle("Agent")
+                .setSingleChoiceItems(AGENT_LABELS, agentIdx[0], (d, which) -> {
+                    agentIdx[0] = which;
+                    agent.setText(AGENT_LABELS[which]);
+                    d.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show());
         content.addView(agent);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -322,7 +332,7 @@ public class SessionListActivity extends Activity {
                 return;
             }
             v.setEnabled(false);
-            api.createSession(name, dir, "claude-code", new Api.Cb<Session>() {
+            api.createSession(name, dir, AGENT_IDS[agentIdx[0]], new Api.Cb<Session>() {
                 @Override public void onResult(Session session) {
                     dialog.dismiss();
                     openSession(session);
@@ -379,8 +389,15 @@ public class SessionListActivity extends Activity {
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
     }
 
+    /** Agents the backend can run. Hardcoded — the server exposes no listing. */
+    private static final String[] AGENT_IDS    = {"claude-code", "opencode"};
+    private static final String[] AGENT_LABELS = {"Claude Code", "OpenCode"};
+
     static String formatAgent(String agent) {
-        return "claude-code".equals(agent) ? "Claude Code" : agent;
+        for (int i = 0; i < AGENT_IDS.length; i++) {
+            if (AGENT_IDS[i].equals(agent)) return AGENT_LABELS[i];
+        }
+        return agent;
     }
 
     private static final DateTimeFormatter TIME_FMT =
