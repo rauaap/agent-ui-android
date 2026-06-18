@@ -66,6 +66,7 @@ public class SessionActivity extends Activity {
 
     // transcript state
     private TextView agentBubble;     // coalesce consecutive output chunks
+    private StringBuilder agentRaw;   // raw markdown backing the current bubble
     private View pendingApprovalCard;
     private String pendingApprovalId;
     // the most recently rendered tool_use card, so an approval_request for the
@@ -318,6 +319,7 @@ public class SessionActivity extends Activity {
 
         transcript.removeAllViews();
         agentBubble = null;
+        agentRaw = null;
         pendingApprovalCard = null;
         pendingApprovalId = null;
 
@@ -419,6 +421,7 @@ public class SessionActivity extends Activity {
         LinearLayout wrap = Widgets.column(this);
         wrap.setGravity(Gravity.END);
         TextView bubble = Widgets.text(this, text, Theme.INK, 15, false);
+        bubble.setTextIsSelectable(true);
         bubble.setBackground(Theme.rounded(this, Theme.ACCENT_SOFT, 16, Theme.ACCENT_LINE, 1));
         int p = Theme.dp(this, 12);
         bubble.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
@@ -430,22 +433,51 @@ public class SessionActivity extends Activity {
     private void addAgentOutput(String text) {
         if (text == null || text.isEmpty()) return;
         if (agentBubble != null) {
-            agentBubble.append(text);
+            if (agentRaw == null) agentRaw = new StringBuilder();
+            agentRaw.append(text);
+            agentBubble.setText(Markdown.render(this, agentRaw.toString(), Theme.INK));
             scrollToBottom();
             return;
         }
+        // The raw markdown is kept verbatim: the bubble shows the rendered form,
+        // but the Copy button (and any re-render as chunks stream in) uses this.
+        final StringBuilder raw = new StringBuilder(text);
+        agentRaw = raw;
+
         LinearLayout wrap = Widgets.column(this);
+
+        LinearLayout labelRow = Widgets.row(this);
+        Widgets.margins(labelRow, 0, 0, 0, Theme.dp(this, 5));
         TextView labelView = Widgets.text(this, "CLAUDE", Theme.ACCENT_STRONG, 11, true);
         labelView.setLetterSpacing(0.07f);
-        Widgets.margins(labelView, 0, 0, 0, Theme.dp(this, 5));
-        TextView bubble = Widgets.text(this, text, Theme.INK, 15, false);
+        labelView.setLayoutParams(lp(0, WRAP, 1f));
+        TextView copyBtn = Widgets.text(this, "COPY", Theme.FAINT, 11, true);
+        copyBtn.setLetterSpacing(0.06f);
+        int cbp = Theme.dp(this, 6);
+        copyBtn.setPadding(cbp, Theme.dp(this, 2), cbp, Theme.dp(this, 2));
+        copyBtn.setClickable(true);
+        copyBtn.setOnClickListener(v -> copyToClipboard(raw.toString()));
+        labelRow.addView(labelView);
+        labelRow.addView(copyBtn);
+        wrap.addView(labelRow);
+
+        TextView bubble = Widgets.text(this, "", Theme.INK, 15, false);
+        bubble.setText(Markdown.render(this, raw.toString(), Theme.INK));
+        bubble.setTextIsSelectable(true);
         bubble.setBackground(Theme.rounded(this, Theme.PANEL, 16, Theme.LINE, 1));
         int p = Theme.dp(this, 12);
         bubble.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
-        wrap.addView(labelView);
         wrap.addView(bubble);
         append(wrap);
         agentBubble = bubble;
+    }
+
+    private void copyToClipboard(String text) {
+        android.content.ClipboardManager cm =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("agent message", text));
+        android.widget.Toast.makeText(this, "Copied", android.widget.Toast.LENGTH_SHORT).show();
     }
 
     private void addToolUse(String tool, JSONObject inputObj) {
@@ -476,6 +508,7 @@ public class SessionActivity extends Activity {
         if (content == null) {
             content = Widgets.mono(this, prettyJson(in), 0xFFD4CFE0, 12.5f);
         }
+        if (content instanceof TextView) ((TextView) content).setTextIsSelectable(true);
         HorizontalScrollView body = new HorizontalScrollView(this);
         body.addView(content, lp(WRAP, WRAP));
         int bp = Theme.dp(this, 12);
@@ -540,6 +573,7 @@ public class SessionActivity extends Activity {
         // The command/edit, formatted and shown expanded — this is what you're
         // approving. Unrecognised tools fall back to pretty JSON.
         View formatted = ToolFormat.body(this, tool, in);
+        if (formatted instanceof TextView) ((TextView) formatted).setTextIsSelectable(true);
         int bp = Theme.dp(this, 11);
         if (formatted != null) {
             HorizontalScrollView bodyScroll = new HorizontalScrollView(this);
@@ -554,6 +588,7 @@ public class SessionActivity extends Activity {
             addRawToggle(card, in);
         } else {
             TextView pre = Widgets.mono(this, prettyJson(in), Theme.INK, 12.5f);
+            pre.setTextIsSelectable(true);
             pre.setBackground(Theme.rounded(this, 0x47000000, 10, Theme.withAlpha(Theme.AWAITING, 0x22), 1));
             pre.setPadding(bp, bp, bp, bp);
             LinearLayout.LayoutParams preLp = lp(MATCH, WRAP);
@@ -593,6 +628,7 @@ public class SessionActivity extends Activity {
         toggle.setClickable(true);
 
         TextView raw = Widgets.mono(this, prettyJson(in), Theme.MUTED, 12f);
+        raw.setTextIsSelectable(true);
         raw.setBackground(Theme.rounded(this, 0x47000000, 8));
         int rp = Theme.dp(this, 10);
         raw.setPadding(rp, rp, rp, rp);
@@ -665,6 +701,7 @@ public class SessionActivity extends Activity {
         labelView.setLetterSpacing(0.07f);
         Widgets.margins(labelView, 0, 0, 0, Theme.dp(this, 5));
         TextView text = Widgets.text(this, message, Theme.DANGER, 14, false);
+        text.setTextIsSelectable(true);
         text.setBackground(Theme.rounded(this, Theme.DANGER_SOFT, 10, Theme.DANGER_LINE, 1));
         int p = Theme.dp(this, 12);
         text.setPadding(p, p, p, p);
