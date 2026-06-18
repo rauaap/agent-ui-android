@@ -1,6 +1,7 @@
 package com.agentui.app;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
@@ -38,6 +39,8 @@ public class SessionActivity extends Activity {
     static final String EXTRA_DIR = "dir";
     static final String EXTRA_STATUS = "status";
 
+    private static final int REQ_SETTINGS = 2;
+
     private Api api;
     private String sessionId;
     private String sessionName;
@@ -48,7 +51,7 @@ public class SessionActivity extends Activity {
     private LinearLayout transcript;
     private ScrollView scroll;
     private LinearLayout statusHolder;
-    private ImageView bellBtn;
+    private TextView nameView;
     private TextView stopBtn;
     private TextView activity;
     private EditText input;
@@ -135,7 +138,7 @@ public class SessionActivity extends Activity {
 
         LinearLayout headings = Widgets.column(this);
         headings.setLayoutParams(lp(0, WRAP, 1f));
-        TextView nameView = Widgets.text(this, name == null ? "" : name, Theme.INK, 17, true);
+        nameView = Widgets.text(this, name == null ? "" : name, Theme.INK, 17, true);
         nameView.setMaxLines(1);
         nameView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         headings.addView(nameView);
@@ -146,15 +149,16 @@ public class SessionActivity extends Activity {
         headings.addView(dirView);
         header.addView(headings);
 
-        bellBtn = new ImageView(this);
-        bellBtn.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        int bellPad = Theme.dp(this, 10);
-        bellBtn.setPadding(bellPad, bellPad, bellPad, bellPad);
-        bellBtn.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
-        bellBtn.setClickable(true);
-        bellBtn.setOnClickListener(v -> toggleNotify());
-        header.addView(bellBtn);
-        updateBell();
+        ImageView gearBtn = new ImageView(this);
+        gearBtn.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        gearBtn.setImageResource(R.drawable.ic_gear);
+        gearBtn.setColorFilter(Theme.MUTED);
+        int gearPad = Theme.dp(this, 10);
+        gearBtn.setPadding(gearPad, gearPad, gearPad, gearPad);
+        gearBtn.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
+        gearBtn.setClickable(true);
+        gearBtn.setOnClickListener(v -> openSettings());
+        header.addView(gearBtn);
 
         statusHolder = Widgets.row(this);
         Widgets.margins(statusHolder, Theme.dp(this, 8), 0, 0, 0);
@@ -243,23 +247,31 @@ public class SessionActivity extends Activity {
     /* notifications                                                    */
     /* ---------------------------------------------------------------- */
 
-    private void toggleNotify() {
-        notifyOn = !notifyOn;
-        api.prefs().setNotify(sessionId, notifyOn);
-        updateBell();
-        if (notifyOn) {
-            // If a task is already in flight, start watching it right away.
-            if ("running".equals(status) || "awaiting_approval".equals(status)) {
-                WatchService.watch(this, sessionId, sessionName, status);
-            }
-        } else {
-            WatchService.unwatch(this, sessionId);
-        }
+    private void openSettings() {
+        Intent i = new Intent(this, SessionSettingsActivity.class);
+        i.putExtra(SessionSettingsActivity.EXTRA_ID, sessionId);
+        i.putExtra(SessionSettingsActivity.EXTRA_NAME, sessionName);
+        i.putExtra(SessionSettingsActivity.EXTRA_STATUS, status);
+        startActivityForResult(i, REQ_SETTINGS);
     }
 
-    private void updateBell() {
-        bellBtn.setImageResource(notifyOn ? R.drawable.ic_bell : R.drawable.ic_bell_off);
-        bellBtn.setColorFilter(notifyOn ? Theme.INK : Theme.FAINT);
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_SETTINGS) return;
+        // The notification opt-in lives in Prefs; re-read it after settings close.
+        notifyOn = api.prefs().notifyEnabled(sessionId);
+        if (data != null) {
+            String newName = data.getStringExtra(SessionSettingsActivity.EXTRA_NAME);
+            if (newName != null && !newName.isEmpty()) {
+                sessionName = newName;
+                nameView.setText(newName);
+            }
+        }
+        // Keep the watch in sync with the (possibly changed) name and opt-in.
+        if (notifyOn && ("running".equals(status) || "awaiting_approval".equals(status))) {
+            WatchService.watch(this, sessionId, sessionName, status);
+        }
     }
 
     private void applyStatus(String s) {

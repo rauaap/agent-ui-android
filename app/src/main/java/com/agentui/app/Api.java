@@ -26,6 +26,7 @@ import okhttp3.ResponseBody;
  * main thread. Mirrors the web front-end's fetch() calls:
  *   GET    /sessions
  *   POST   /sessions
+ *   PATCH  /sessions/{id}
  *   DELETE /sessions/{id}
  *   POST   /sessions/{id}/stop
  */
@@ -73,6 +74,18 @@ final class Api {
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions")
                 .post(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
+    }
+
+    void renameSession(String id, String name, Cb<Session> cb) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("name", name);
+        } catch (Exception ignored) {}
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/sessions/" + id)
+                .patch(RequestBody.create(payload.toString(), JSON))
                 .build();
         enqueue(req, cb, body -> Session.from(new JSONObject(body)));
     }
