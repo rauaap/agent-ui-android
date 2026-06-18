@@ -10,6 +10,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -64,6 +65,11 @@ public class SessionActivity extends Activity {
     private TextView agentBubble;     // coalesce consecutive output chunks
     private View pendingApprovalCard;
     private String pendingApprovalId;
+    // the most recently rendered tool_use card, so an approval_request for the
+    // same call can replace it instead of duplicating the command/edit
+    private View lastToolCard;
+    private String lastToolName;
+    private JSONObject lastToolInput;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -350,9 +356,11 @@ public class SessionActivity extends Activity {
                 break;
             case "input":
                 agentBubble = null;
+                clearLastTool();
                 addUserMessage(msg.optString("text", ""));
                 break;
             case "output":
+                clearLastTool();
                 addAgentOutput(msg.optString("text", ""));
                 break;
             case "tool_use":
@@ -368,9 +376,11 @@ public class SessionActivity extends Activity {
                 break;
             case "done":
                 agentBubble = null;
+                clearLastTool();
                 break;
             case "error":
                 agentBubble = null;
+                clearLastTool();
                 addError(msg.optString("message", "Unknown error"));
                 break;
             default:
@@ -450,7 +460,12 @@ public class SessionActivity extends Activity {
         head.addView(nameView);
         head.addView(summary);
 
-        TextView body = Widgets.mono(this, prettyJson(in), 0xFFD4CFE0, 12.5f);
+        View content = ToolFormat.body(this, tool, in);
+        if (content == null) {
+            content = Widgets.mono(this, prettyJson(in), 0xFFD4CFE0, 12.5f);
+        }
+        HorizontalScrollView body = new HorizontalScrollView(this);
+        body.addView(content, lp(WRAP, WRAP));
         int bp = Theme.dp(this, 12);
         body.setPadding(bp, bp, bp, bp);
         body.setBackgroundColor(0x40000000);
@@ -465,10 +480,33 @@ public class SessionActivity extends Activity {
         wrap.addView(head);
         wrap.addView(body);
         append(wrap);
+
+        lastToolCard = wrap;
+        lastToolName = tool;
+        lastToolInput = in;
+    }
+
+    private void clearLastTool() {
+        lastToolCard = null;
+        lastToolName = null;
+        lastToolInput = null;
     }
 
     private void addApprovalRequest(JSONObject msg) {
         final String id = msg.optString("request_id", "");
+        final String tool = msg.optString("tool", "tool");
+        final JSONObject in = msg.optJSONObject("input") == null
+                ? new JSONObject() : msg.optJSONObject("input");
+
+        // This approval is for the tool_use card we just rendered: drop that card
+        // so the command/edit isn't shown twice — this card replaces it.
+        if (lastToolCard != null && tool.equals(lastToolName)
+                && toolSummary(tool, in).equals(toolSummary(
+                        lastToolName, lastToolInput == null ? new JSONObject() : lastToolInput))) {
+            transcript.removeView(lastToolCard);
+        }
+        clearLastTool();
+
         LinearLayout card = Widgets.column(this);
         card.setBackground(Theme.rounded(this, Theme.withAlpha(Theme.AWAITING, 0x18), 14,
                 Theme.withAlpha(Theme.AWAITING, 0x66), 1));
@@ -479,7 +517,7 @@ public class SessionActivity extends Activity {
         TextView tag = Widgets.text(this, "APPROVAL REQUIRED", Theme.AWAITING, 11, true);
         tag.setLetterSpacing(0.06f);
         Widgets.margins(tag, 0, 0, Theme.dp(this, 10), 0);
-        TextView toolView = Widgets.mono(this, msg.optString("tool", "tool"), Theme.INK, 12.5f);
+        TextView toolView = Widgets.mono(this, tool, Theme.INK, 12.5f);
         toolView.setBackground(Theme.rounded(this, 0x40000000, 6));
         int tp = Theme.dp(this, 8);
         toolView.setPadding(tp, Theme.dp(this, 2), tp, Theme.dp(this, 2));
@@ -487,14 +525,30 @@ public class SessionActivity extends Activity {
         head.addView(toolView);
         card.addView(head);
 
-        TextView pre = Widgets.mono(this, prettyJson(msg.optJSONObject("input")), Theme.INK, 12.5f);
-        pre.setBackground(Theme.rounded(this, 0x47000000, 10, Theme.withAlpha(Theme.AWAITING, 0x22), 1));
-        int pp = Theme.dp(this, 11);
-        pre.setPadding(pp, pp, pp, pp);
-        LinearLayout.LayoutParams preLp = lp(MATCH, WRAP);
-        preLp.topMargin = Theme.dp(this, 11);
-        pre.setLayoutParams(preLp);
-        card.addView(pre);
+        // The command/edit, formatted and shown expanded — this is what you're
+        // approving. Unrecognised tools fall back to pretty JSON.
+        View formatted = ToolFormat.body(this, tool, in);
+        int bp = Theme.dp(this, 11);
+        if (formatted != null) {
+            HorizontalScrollView bodyScroll = new HorizontalScrollView(this);
+            bodyScroll.addView(formatted, lp(WRAP, WRAP));
+            bodyScroll.setPadding(bp, bp, bp, bp);
+            bodyScroll.setBackground(Theme.rounded(this, 0x47000000, 10,
+                    Theme.withAlpha(Theme.AWAITING, 0x22), 1));
+            LinearLayout.LayoutParams bsLp = lp(MATCH, WRAP);
+            bsLp.topMargin = Theme.dp(this, 11);
+            bodyScroll.setLayoutParams(bsLp);
+            card.addView(bodyScroll);
+            addRawToggle(card, in);
+        } else {
+            TextView pre = Widgets.mono(this, prettyJson(in), Theme.INK, 12.5f);
+            pre.setBackground(Theme.rounded(this, 0x47000000, 10, Theme.withAlpha(Theme.AWAITING, 0x22), 1));
+            pre.setPadding(bp, bp, bp, bp);
+            LinearLayout.LayoutParams preLp = lp(MATCH, WRAP);
+            preLp.topMargin = Theme.dp(this, 11);
+            pre.setLayoutParams(preLp);
+            card.addView(pre);
+        }
 
         LinearLayout buttons = Widgets.row(this);
         LinearLayout.LayoutParams btnRowLp = lp(MATCH, WRAP);
@@ -516,6 +570,33 @@ public class SessionActivity extends Activity {
         append(card);
         pendingApprovalCard = card;
         pendingApprovalId = id;
+    }
+
+    /** A collapsed "raw input" disclosure that reveals the full JSON on tap. */
+    private void addRawToggle(LinearLayout card, JSONObject in) {
+        TextView toggle = Widgets.mono(this, "▸ raw input", Theme.FAINT, 11.5f);
+        LinearLayout.LayoutParams tLp = lp(WRAP, WRAP);
+        tLp.topMargin = Theme.dp(this, 9);
+        toggle.setLayoutParams(tLp);
+        toggle.setClickable(true);
+
+        TextView raw = Widgets.mono(this, prettyJson(in), Theme.MUTED, 12f);
+        raw.setBackground(Theme.rounded(this, 0x47000000, 8));
+        int rp = Theme.dp(this, 10);
+        raw.setPadding(rp, rp, rp, rp);
+        LinearLayout.LayoutParams rawLp = lp(MATCH, WRAP);
+        rawLp.topMargin = Theme.dp(this, 6);
+        raw.setLayoutParams(rawLp);
+        raw.setVisibility(View.GONE);
+
+        toggle.setOnClickListener(v -> {
+            boolean open = raw.getVisibility() == View.VISIBLE;
+            raw.setVisibility(open ? View.GONE : View.VISIBLE);
+            toggle.setText(open ? "▸ raw input" : "▾ raw input");
+        });
+
+        card.addView(toggle);
+        card.addView(raw);
     }
 
     private void respondApproval(String id, String behavior, View card) {
