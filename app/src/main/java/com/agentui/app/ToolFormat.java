@@ -55,36 +55,30 @@ final class ToolFormat {
                         JSONObject e = edits.optJSONObject(i);
                         if (e == null) continue;
                         if (sb.length() > 0) line(sb, "", "⋯", CTX); // ⋯ separator
-                        hunk(sb, e.optString("old_string", ""), e.optString("new_string", ""));
+                        appendDiff(sb, e.optString("old_string", ""), e.optString("new_string", ""));
                     }
                 }
                 break;
             case "Write":
-                hunk(sb, "", in.optString("content", ""));
+                appendDiff(sb, "", in.optString("content", ""));
                 break;
             default: // Edit
-                hunk(sb, in.optString("old_string", ""), in.optString("new_string", ""));
+                appendDiff(sb, in.optString("old_string", ""), in.optString("new_string", ""));
                 break;
         }
         if (sb.length() == 0) return null;
         return Widgets.mono(ctx, sb, Theme.INK, 12.5f);
     }
 
-    /** Append a removed/added pair as a diff hunk, eliding common context. */
-    private static void hunk(SpannableStringBuilder sb, String oldS, String newS) {
-        String[] o = oldS.split("\n", -1);
-        String[] n = newS.split("\n", -1);
-
-        int pre = 0;
-        while (pre < o.length && pre < n.length && o[pre].equals(n[pre])) pre++;
-        int suf = 0;
-        while (suf < o.length - pre && suf < n.length - pre
-                && o[o.length - 1 - suf].equals(n[n.length - 1 - suf])) suf++;
-
-        for (int i = 0; i < pre; i++) line(sb, " ", o[i], CTX);
-        for (int i = pre; i < o.length - suf; i++) line(sb, "-", o[i], DEL);
-        for (int i = pre; i < n.length - suf; i++) line(sb, "+", n[i], ADD);
-        for (int i = n.length - suf; i < n.length; i++) line(sb, " ", n[i], CTX);
+    /** Paint a {@link LineDiff} as red/green/dim gutter lines into the spannable. */
+    private static void appendDiff(SpannableStringBuilder sb, String oldS, String newS) {
+        for (LineDiff.Row row : LineDiff.diff(oldS, newS)) {
+            switch (row.kind) {
+                case ADD:    line(sb, "+", row.text, ADD); break;
+                case DELETE: line(sb, "-", row.text, DEL); break;
+                default:     line(sb, " ", row.text, CTX); break;
+            }
+        }
     }
 
     private static void line(SpannableStringBuilder sb, String gutter, String text, int color) {

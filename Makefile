@@ -11,7 +11,7 @@ RUN_ANDROID = $(PODMAN) run --rm --userns=keep-id \
 	-w /work \
 	$(IMAGE)
 
-.PHONY: image debug release clean gradle shell install
+.PHONY: image debug release test clean gradle shell install
 
 image:
 	$(PODMAN) build -t $(IMAGE) .
@@ -21,6 +21,9 @@ debug: image
 
 release: image
 	$(RUN_ANDROID) gradle --no-daemon assembleRelease
+
+test: image
+	$(RUN_ANDROID) gradle --no-daemon testDebugUnitTest
 
 clean: image
 	$(RUN_ANDROID) gradle --no-daemon clean
