@@ -13,8 +13,12 @@ to install on a device).
 - **Session list** — create, open, and delete agent sessions. New sessions take
   a name and a working directory; the directory is pre-filled from a configurable
   default and tracks the name as you type until you edit it by hand.
-- **Live transcript** — streamed agent output, collapsible tool-use cards, and
-  inline approval prompts (Allow / Deny) over a WebSocket that auto-reconnects.
+- **Live transcript** — streamed agent output, collapsible tool-use cards,
+  inline approval prompts (Allow / Deny), and multiple-choice question prompts
+  (Claude's AskUserQuestion) over a WebSocket that auto-reconnects.
+- **Auto-approve** — per-session toggles in session settings to skip the approval
+  prompt for writes and/or shell commands; auto-approved tools still appear in the
+  transcript, marked as such. Reads always run.
 - **Composer** — send prompts; input locks while the agent is running.
 - **Background notifications** — toggle the bell on a session to watch it from a
   foreground service. You get a high-priority notification when the task finishes
@@ -40,6 +44,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 |------|------|
 | `SessionListActivity.java` | launcher screen: list / create / delete sessions |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
+| `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, auto-approve toggles |
 | `SettingsActivity.java`    | server address + default working directory form (persisted) |
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
@@ -92,26 +97,42 @@ agent backend.
 The server lives in [rauaap/agent-ui](https://github.com/rauaap/agent-ui); this
 is the protocol this client speaks to it.
 
-REST: `GET /sessions`, `POST /sessions`, `DELETE /sessions/{id}`,
-`POST /sessions/{id}/stop`.
+REST: `GET /sessions`, `POST /sessions`, `PATCH /sessions/{id}`,
+`DELETE /sessions/{id}`, `POST /sessions/{id}/stop`.
 
 `POST /sessions` body: `{ name, working_dir, agent }`.
+
+`PATCH /sessions/{id}` body (all optional): `{ name, auto_approve_write,
+auto_approve_command }` — rename and/or flip the per-session auto-approve toggles.
 
 WebSocket: `ws(s)://<host>/ws/sessions/{id}`
 
 ```
 client -> server : { type: "input", text }
                    { type: "approval_response", request_id, behavior }
+                   { type: "question_response", request_id, answers }
 
 server -> client : { type: "status",           status }   # idle | running | awaiting_approval
                    { type: "input",            text }
                    { type: "output",           text }
                    { type: "tool_use",         tool, input }
-                   { type: "approval_request", request_id, tool, input }
-                   { type: "approval_response", request_id, behavior }
+                   { type: "approval_request", request_id, tool, input, category, auto_approved? }
+                   { type: "approval_response", request_id, behavior, auto? }
+                   { type: "question",         request_id, questions }
+                   { type: "question_response", request_id, answers }
+                   { type: "settings",         auto_approve_write, auto_approve_command }
                    { type: "done" }
                    { type: "error",            message }
 ```
+
+`question` / `question_response` cover Claude Code's **AskUserQuestion** tool — a
+multiple-choice prompt the client renders as selectable options, sending the
+pick back as `answers` (keyed by question text; a label, or array of labels for
+`multiSelect`). Claude only.
+
+An `approval_request` with `auto_approved: true` was answered by a session toggle;
+the client renders it as a marker instead of Allow / Deny buttons, and the paired
+`approval_response` carries `auto: true`.
 
 ## Notes
 

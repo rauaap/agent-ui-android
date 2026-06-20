@@ -33,13 +33,19 @@ public class SessionSettingsActivity extends Activity {
     static final String EXTRA_ID = "id";
     static final String EXTRA_NAME = "name";
     static final String EXTRA_STATUS = "status";
+    static final String EXTRA_AUTO_WRITE = "auto_write";
+    static final String EXTRA_AUTO_COMMAND = "auto_command";
 
     private Api api;
     private String sessionId;
     private String sessionName;
     private String status;
+    private boolean autoApproveWrite;
+    private boolean autoApproveCommand;
 
     private EditText nameField;
+    private Switch writeSwitch;
+    private Switch commandSwitch;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,6 +55,8 @@ public class SessionSettingsActivity extends Activity {
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
         status = getIntent().getStringExtra(EXTRA_STATUS);
         if (status == null) status = "idle";
+        autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
+        autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
         publishResult();
         setContentView(buildRoot());
     }
@@ -103,6 +111,26 @@ public class SessionSettingsActivity extends Activity {
         Widgets.margins(notifyHint, 0, Theme.dp(this, 7), 0, 0);
         form.addView(notifyHint);
 
+        // ---- auto-approve ----
+        form.addView(spacer(28));
+        form.addView(section("Auto-approve"));
+        form.addView(spacer(12));
+
+        writeSwitch = new Switch(this);
+        form.addView(toggleRow("Writes", writeSwitch, autoApproveWrite,
+                checked -> applyAutoApprove("write", checked)));
+        form.addView(spacer(10));
+        commandSwitch = new Switch(this);
+        form.addView(toggleRow("Commands", commandSwitch, autoApproveCommand,
+                checked -> applyAutoApprove("command", checked)));
+
+        TextView autoHint = Widgets.text(this,
+                "Skip the approval prompt for file writes/edits or shell commands "
+                        + "in this session; auto-approved tools are still shown in the "
+                        + "transcript. Reads always run.", Theme.MUTED, 12.5f, false);
+        Widgets.margins(autoHint, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(autoHint);
+
         // ---- session / rename ----
         form.addView(spacer(28));
         form.addView(section("Session"));
@@ -156,6 +184,57 @@ public class SessionSettingsActivity extends Activity {
     }
 
     /* ---------------------------------------------------------------- */
+    /* auto-approve                                                     */
+    /* ---------------------------------------------------------------- */
+
+    private interface BoolSink { void set(boolean checked); }
+
+    /** A label + switch row that reports flips through {@code sink}. */
+    private LinearLayout toggleRow(String label, Switch sw, boolean initial, BoolSink sink) {
+        LinearLayout row = Widgets.row(this);
+        TextView text = Widgets.text(this, label, Theme.INK, 15, false);
+        text.setLayoutParams(lp(0, WRAP, 1f));
+        row.addView(text);
+        sw.setChecked(initial);
+        sw.setOnCheckedChangeListener((b, checked) -> sink.set(checked));
+        row.addView(sw);
+        return row;
+    }
+
+    /**
+     * Push a single toggle change to the backend. The local fields are the
+     * last-known-good truth and are only updated on success; on failure we revert
+     * just the switch the user touched, so the UI never claims a setting that
+     * didn't stick.
+     */
+    private void applyAutoApprove(String category, boolean checked) {
+        if (sessionId == null) return;
+        boolean write = "write".equals(category) ? checked : autoApproveWrite;
+        boolean command = "command".equals(category) ? checked : autoApproveCommand;
+        api.setAutoApprove(sessionId, write, command, new Api.Cb<Session>() {
+            @Override public void onResult(Session session) {
+                autoApproveWrite = session.autoApproveWrite;
+                autoApproveCommand = session.autoApproveCommand;
+                publishResult();
+            }
+            @Override public void onError(String message) {
+                Switch sw = "write".equals(category) ? writeSwitch : commandSwitch;
+                boolean previous = "write".equals(category)
+                        ? autoApproveWrite : autoApproveCommand;
+                setSwitchSilently(sw, previous, c -> applyAutoApprove(category, c));
+                toast("Couldn't update: " + message);
+            }
+        });
+    }
+
+    /** Set a switch's checked state without firing its change listener. */
+    private void setSwitchSilently(Switch sw, boolean checked, BoolSink sink) {
+        sw.setOnCheckedChangeListener(null);
+        sw.setChecked(checked);
+        sw.setOnCheckedChangeListener((b, c) -> sink.set(c));
+    }
+
+    /* ---------------------------------------------------------------- */
     /* rename                                                           */
     /* ---------------------------------------------------------------- */
 
@@ -185,10 +264,12 @@ public class SessionSettingsActivity extends Activity {
         });
     }
 
-    /** Hand the current name back so the caller can update its header. */
+    /** Hand the current name and toggles back so the caller can stay in sync. */
     private void publishResult() {
         Intent data = new Intent();
         data.putExtra(EXTRA_NAME, sessionName);
+        data.putExtra(EXTRA_AUTO_WRITE, autoApproveWrite);
+        data.putExtra(EXTRA_AUTO_COMMAND, autoApproveCommand);
         setResult(RESULT_OK, data);
     }
 

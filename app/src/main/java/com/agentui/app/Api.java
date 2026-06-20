@@ -90,6 +90,19 @@ final class Api {
         enqueue(req, cb, body -> Session.from(new JSONObject(body)));
     }
 
+    void setAutoApprove(String id, boolean write, boolean command, Cb<Session> cb) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("auto_approve_write", write);
+            payload.put("auto_approve_command", command);
+        } catch (Exception ignored) {}
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/sessions/" + id)
+                .patch(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
+    }
+
     void deleteSession(String id, Cb<Void> cb) {
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions/" + id)

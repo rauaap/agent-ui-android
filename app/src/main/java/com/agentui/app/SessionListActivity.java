@@ -234,6 +234,8 @@ public class SessionListActivity extends Activity {
         i.putExtra(SessionActivity.EXTRA_NAME, s.name);
         i.putExtra(SessionActivity.EXTRA_DIR, s.workingDir);
         i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
+        i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
+        i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
         startActivity(i);
     }
 
