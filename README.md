@@ -1,7 +1,7 @@
 # Agent UI — Android
 
 A native Android client for controlling Claude Code agents. It talks to the
-[agent-ui](https://github.com/rauaap/agent-ui) backend over REST for managing
+[agent-ui-server](https://github.com/rauaap/agent-ui-server) backend over REST for managing
 sessions and a WebSocket per session for the live transcript.
 
 The build is fully containerized and CLI-driven — no JDK, Android SDK, or Gradle
@@ -94,7 +94,7 @@ agent backend.
 
 ## Backend protocol
 
-The server lives in [rauaap/agent-ui](https://github.com/rauaap/agent-ui); this
+The server lives in [rauaap/agent-ui-server](https://github.com/rauaap/agent-ui-server); this
 is the protocol this client speaks to it.
 
 REST: `GET /sessions`, `POST /sessions`, `PATCH /sessions/{id}`,
