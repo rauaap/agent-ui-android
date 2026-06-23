@@ -11,6 +11,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -57,6 +58,7 @@ public class SessionActivity extends Activity {
     // views
     private LinearLayout transcript;
     private ScrollView scroll;
+    private TextView scrollDownBtn;
     private LinearLayout statusHolder;
     private TextView nameView;
     private TextView stopBtn;
@@ -202,12 +204,34 @@ public class SessionActivity extends Activity {
         root.addView(div);
 
         // ---- transcript ----
+        // A FrameLayout lets the "scroll to bottom" button float over the scrollback.
+        FrameLayout scrollArea = new FrameLayout(this);
+        scrollArea.setLayoutParams(lp(MATCH, 0, 1f));
+
         scroll = new ScrollView(this);
-        scroll.setLayoutParams(lp(MATCH, 0, 1f));
+        scroll.setLayoutParams(new FrameLayout.LayoutParams(MATCH, MATCH));
         scroll.setFillViewport(true);
         transcript = newTranscript();
         scroll.addView(transcript);
-        root.addView(scroll);
+        scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> updateScrollButton());
+        scrollArea.addView(scroll);
+
+        // Floating down arrow, shown only when the transcript can scroll further down.
+        scrollDownBtn = Widgets.text(this, "↓", Theme.INK, 20, false);
+        scrollDownBtn.setGravity(Gravity.CENTER);
+        scrollDownBtn.setBackground(Theme.pill(this, Theme.PANEL2, Theme.LINE, 1));
+        scrollDownBtn.setElevation(Theme.dp(this, 4));
+        scrollDownBtn.setVisibility(View.GONE);
+        scrollDownBtn.setOnClickListener(v -> scrollToBottom());
+        int sdSize = Theme.dp(this, 40);
+        FrameLayout.LayoutParams sdLp = new FrameLayout.LayoutParams(sdSize, sdSize);
+        sdLp.gravity = Gravity.BOTTOM | Gravity.END;
+        int sdMargin = Theme.dp(this, 12);
+        sdLp.setMargins(0, 0, sdMargin, sdMargin);
+        scrollDownBtn.setLayoutParams(sdLp);
+        scrollArea.addView(scrollDownBtn);
+
+        root.addView(scrollArea);
 
         // ---- composer ----
         LinearLayout footer = Widgets.column(this);
@@ -509,7 +533,16 @@ public class SessionActivity extends Activity {
     }
 
     private void scrollToBottom() {
-        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+        scroll.post(() -> {
+            scroll.fullScroll(View.FOCUS_DOWN);
+            updateScrollButton();
+        });
+    }
+
+    /** Show the floating down arrow only while the transcript can scroll further. */
+    private void updateScrollButton() {
+        if (scrollDownBtn == null) return;
+        scrollDownBtn.setVisibility(scroll.canScrollVertically(1) ? View.VISIBLE : View.GONE);
     }
 
     private void addUserMessage(String text) {
