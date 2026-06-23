@@ -85,6 +85,13 @@ public class SessionActivity extends Activity {
     private View lastToolCard;
     private String lastToolName;
     private JSONObject lastToolInput;
+    // The first connection renders its replay straight into the visible transcript
+    // (progressive, nothing to preserve). A reconnect instead assembles the replay
+    // into a detached buffer and swaps it in only once it's complete, so a slow
+    // reconnect keeps the old scrollback on screen instead of blanking it.
+    private boolean firstConnect = true;
+    private boolean awaitingReplay;   // true while buffering a reconnect's replay
+    private LinearLayout replayBuffer; // detached build target during a reconnect
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -198,8 +205,7 @@ public class SessionActivity extends Activity {
         scroll = new ScrollView(this);
         scroll.setLayoutParams(lp(MATCH, 0, 1f));
         scroll.setFillViewport(true);
-        transcript = Widgets.column(this);
-        transcript.setPadding(pad, pad, pad, pad);
+        transcript = newTranscript();
         scroll.addView(transcript);
         root.addView(scroll);
 
@@ -344,13 +350,28 @@ public class SessionActivity extends Activity {
         cancelReconnect();
         if (!active || sessionId == null) return;
 
-        transcript.removeAllViews();
-        agentBubble = null;
-        agentRaw = null;
-        pendingApprovalCard = null;
-        pendingApprovalId = null;
-        pendingQuestionCard = null;
-        pendingQuestionId = null;
+        if (firstConnect) {
+            // First open: stream the replay straight into the (empty) visible
+            // transcript so content shows up progressively as it arrives.
+            awaitingReplay = false;
+        } else {
+            // Reconnect (e.g. the socket dropped while we were backgrounded):
+            // assemble the server's replay into a detached buffer and keep the
+            // current scrollback on screen until it's fully rebuilt, then swap it
+            // in atomically — see commitReplay(), driven from the end-of-replay
+            // status message. A slow reconnect never blanks the transcript and
+            // never shows it refilling row by row.
+            awaitingReplay = true;
+            replayBuffer = newTranscript();
+            transcript = replayBuffer;
+            agentBubble = null;
+            agentRaw = null;
+            pendingApprovalCard = null;
+            pendingApprovalId = null;
+            pendingQuestionCard = null;
+            pendingQuestionId = null;
+            clearLastTool();
+        }
 
         String url = api.prefs().wsBase() + "/ws/sessions/" + sessionId;
         Request req = new Request.Builder().url(url).build();
@@ -359,7 +380,9 @@ public class SessionActivity extends Activity {
                 runOnUiThread(() -> reconnectAttempt = 0);
             }
             @Override public void onMessage(WebSocket ws, String text) {
-                runOnUiThread(() -> handleMessage(text));
+                // Ignore stragglers from a superseded socket so they can't trigger
+                // the rebuild before the current socket's replay arrives.
+                runOnUiThread(() -> { if (ws == socket) handleMessage(text); });
             }
             @Override public void onClosed(WebSocket ws, int code, String reason) {
                 runOnUiThread(() -> scheduleReconnect(ws));
@@ -385,6 +408,29 @@ public class SessionActivity extends Activity {
         }
     }
 
+    /** A fresh, empty transcript column styled like the live one. */
+    private LinearLayout newTranscript() {
+        LinearLayout t = Widgets.column(this);
+        int pad = Theme.dp(this, 16);
+        t.setPadding(pad, pad, pad, pad);
+        return t;
+    }
+
+    /**
+     * Swap a fully-rebuilt reconnect replay in for the old scrollback in one shot.
+     * Driven by the end-of-replay status message so the visible transcript is
+     * replaced only once the buffer is complete — never blanked mid-load.
+     */
+    private void commitReplay() {
+        awaitingReplay = false;
+        if (replayBuffer == null) return;
+        scroll.removeAllViews();
+        scroll.addView(replayBuffer);
+        transcript = replayBuffer;
+        replayBuffer = null;
+        scrollToBottom();
+    }
+
     private void handleMessage(String raw) {
         JSONObject msg;
         try {
@@ -392,9 +438,15 @@ public class SessionActivity extends Activity {
         } catch (Exception e) {
             return;
         }
+        // Once any data has arrived, future (re)connects buffer their replay
+        // off-screen rather than rendering into the live transcript.
+        firstConnect = false;
         String type = msg.optString("type", "");
         switch (type) {
             case "status":
+                // The server sends this right after the replay finishes, so it's
+                // the cue to swap a buffered reconnect in for the old scrollback.
+                if (awaitingReplay) commitReplay();
                 applyStatus(msg.optString("status", "idle"));
                 break;
             case "settings":
