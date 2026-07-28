@@ -31,7 +31,11 @@ final class Prefs {
     int port() { return sp.getInt(KEY_PORT, 8080); }
     boolean tls() { return sp.getBoolean(KEY_TLS, false); }
 
-    /** Pre-filled into the working-directory field when creating a session. */
+    /**
+     * Pre-filled when starting a new project. Also the fallback path for new
+     * sessions when the session list is unscoped — i.e. talking to a server
+     * old enough to have no {@code /projects} endpoint.
+     */
     String defaultDir() { return sp.getString(KEY_DEFAULT_DIR, DEFAULT_DIR); }
 
     void save(String host, int port, boolean tls, String defaultDir) {

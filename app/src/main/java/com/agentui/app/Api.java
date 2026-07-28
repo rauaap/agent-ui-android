@@ -24,6 +24,9 @@ import okhttp3.ResponseBody;
 /**
  * Thin REST client for the agent backend. All callbacks are delivered on the
  * main thread. Mirrors the web front-end's fetch() calls:
+ *   GET    /projects
+ *   POST   /projects
+ *   DELETE /projects
  *   GET    /sessions
  *   POST   /sessions
  *   PATCH  /sessions/{id}
@@ -36,6 +39,14 @@ final class Api {
     interface Cb<T> {
         void onResult(T value);
         void onError(String message);
+    }
+
+    /**
+     * Callback that also sees the HTTP status, for callers that branch on it —
+     * a 404 from {@code GET /projects} means an older server, not a failure.
+     */
+    interface StatusCb<T> extends Cb<T> {
+        void onHttpError(int code, String message);
     }
 
     private final OkHttpClient client;
@@ -53,6 +64,47 @@ final class Api {
 
     OkHttpClient http() { return client; }
     Prefs prefs() { return prefs; }
+
+    void listProjects(Cb<List<Project>> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/projects").get().build();
+        enqueue(req, cb, body -> {
+            List<Project> out = new ArrayList<>();
+            JSONArray arr = new JSONArray(body);
+            for (int i = 0; i < arr.length(); i++) out.add(Project.from(arr.getJSONObject(i)));
+            return out;
+        });
+    }
+
+    /** Creates the project row and its directory; harmless if both exist. */
+    void createProject(String path, String name, Cb<Project> cb) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("path", path);
+            payload.put("name", name);
+        } catch (Exception ignored) {}
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/projects")
+                .post(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> Project.from(new JSONObject(body)));
+    }
+
+    /**
+     * Forgets a project and its sessions. The path travels in the body — a
+     * filesystem path has no business in a URL segment — which is why this is
+     * a DELETE with content rather than /projects/{path}.
+     */
+    void deleteProject(String path, Cb<Void> cb) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("path", path);
+        } catch (Exception ignored) {}
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/projects")
+                .delete(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> null);
+    }
 
     void listSessions(Cb<List<Session>> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/sessions").get().build();
@@ -123,6 +175,7 @@ final class Api {
 
     private interface Parser<T> { T parse(String body) throws Exception; }
 
+    @SuppressWarnings("unchecked") // cb's type parameter is the caller's own T
     private <T> void enqueue(Request req, Cb<T> cb, Parser<T> parser) {
         client.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {
@@ -133,7 +186,12 @@ final class Api {
                 try (ResponseBody rb = response.body()) {
                     String body = rb != null ? rb.string() : "";
                     if (!response.isSuccessful()) {
-                        post(() -> cb.onError(serverError(response.code(), body)));
+                        final int code = response.code();
+                        final String message = serverError(code, body);
+                        post(() -> {
+                            if (cb instanceof StatusCb) ((StatusCb<T>) cb).onHttpError(code, message);
+                            else cb.onError(message);
+                        });
                         return;
                     }
                     final T value = parser.parse(body);
