@@ -258,7 +258,7 @@ public class WatchService extends Service {
         String text = n <= 1 ? "Watching for task completion"
                 : "Watching " + n + " sessions";
         PendingIntent open = PendingIntent.getActivity(this, 0,
-                new Intent(this, SessionListActivity.class),
+                new Intent(this, ProjectListActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL_ONGOING)
                 .setContentTitle("Agent UI")

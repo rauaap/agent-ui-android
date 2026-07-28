@@ -10,9 +10,16 @@ to install on a device).
 
 ## Features
 
-- **Session list** — create, open, and delete agent sessions. New sessions take
-  a name and a working directory; the directory is pre-filled from a configurable
-  default and tracks the name as you type until you edit it by hand.
+- **Project list** — the launcher screen. A project is a working directory,
+  stored server-side; each card shows its session count and last activity.
+  Creating one takes a name and a directory: the directory tracks the name under
+  the projects directory from Settings until you edit it by hand, after which the
+  two are independent. Deleting a project removes it and its sessions but
+  **never touches the disk**. A project whose directory has since been removed
+  is flagged `MISSING`, and opening it offers to forget it.
+- **Session list** — the sessions inside one project: create, open, and delete.
+  Scoped to the project, so a new session takes a name and nothing else — no
+  path to type.
 - **Live transcript** — streamed agent output, collapsible tool-use cards,
   inline approval prompts (Allow / Deny), and multiple-choice question prompts
   (Claude's AskUserQuestion) over a WebSocket that auto-reconnects.
@@ -24,9 +31,9 @@ to install on a device).
   foreground service. You get a high-priority notification when the task finishes
   or needs your approval, even with the app off-screen; the watch stops once the
   turn ends and is silent for whichever session you're currently viewing.
-- **Settings** — the server host / port (and optional TLS) plus a default working
+- **Settings** — the server host / port (and optional TLS) plus the projects
   directory are stored in `SharedPreferences`, so they **persist across app
-  restarts and device reboots**. Set them via the ⚙ button on the session list.
+  restarts and device reboots**. Set them via the ⚙ button on the project list.
 
 ## Layout
 
@@ -42,14 +49,15 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 
 | File | Role |
 |------|------|
-| `SessionListActivity.java` | launcher screen: list / create / delete sessions |
+| `ProjectListActivity.java` | launcher screen: list projects, open or start one |
+| `SessionListActivity.java` | one project's sessions: list / create / delete |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
 | `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, auto-approve toggles |
-| `SettingsActivity.java`    | server address + default working directory form (persisted) |
+| `SettingsActivity.java`    | server address + projects directory form (persisted) |
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
-| `Api.java`                 | OkHttp REST client for `/sessions` endpoints |
-| `Session.java`             | session model |
+| `Api.java`                 | OkHttp REST client for `/projects` + `/sessions` |
+| `Session.java` / `Project.java` | session and project models |
 | `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 
 ## Build
@@ -97,10 +105,27 @@ agent backend.
 The server lives in [rauaap/agent-ui-server](https://github.com/rauaap/agent-ui-server); this
 is the protocol this client speaks to it.
 
-REST: `GET /sessions`, `POST /sessions`, `PATCH /sessions/{id}`,
-`DELETE /sessions/{id}`, `POST /sessions/{id}/stop`.
+REST: `GET /projects`, `POST /projects`, `DELETE /projects`, `GET /sessions`,
+`POST /sessions`, `PATCH /sessions/{id}`, `DELETE /sessions/{id}`,
+`POST /sessions/{id}/stop`.
 
-`POST /sessions` body: `{ name, working_dir, agent }`.
+`GET /projects` returns `[{ path, name, exists, session_count, last_active_at }]`,
+where `last_active_at` is `null` for a project with no sessions yet and `exists`
+reports whether the directory is still on the server's disk. There are no nested
+project routes: `GET /sessions` carries `working_dir` on every row, so the client
+filters locally. A **404 means an older server** — the app then falls back to the
+unscoped session list, i.e. its pre-projects behaviour.
+
+`POST /projects` body: `{ path, name }` — path absolute; creates the directory
+and the row, so a new project lists immediately. On a 404 the app opens the
+project anyway and lets the first session's `mkdir -p` create the directory.
+
+`DELETE /projects` body: `{ path }` — removes the project and its sessions,
+leaving the directory alone. The path is in the body, not the URL, so no
+filesystem path has to be encoded into a path segment.
+
+`POST /sessions` body: `{ name, working_dir, agent }`. Creating a session is
+also what creates the project directory (`mkdir -p` server-side).
 
 `PATCH /sessions/{id}` body (all optional): `{ name, auto_approve_write,
 auto_approve_command }` — rename and/or flip the per-session auto-approve toggles.
