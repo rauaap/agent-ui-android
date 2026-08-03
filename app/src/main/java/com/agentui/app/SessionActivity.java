@@ -214,6 +214,16 @@ public class SessionActivity extends Activity {
         transcript = newTranscript();
         scroll.addView(transcript);
         scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> updateScrollButton());
+        // The keyboard opening (or the composer growing) takes height off the bottom
+        // of the transcript. A ScrollView keeps its scroll offset through that, which
+        // pushes whatever you were reading down behind the keyboard, so shift the
+        // scroll by the same amount to hold the bottom edge of the scrollback still.
+        scroll.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                          oldLeft, oldTop, oldRight, oldBottom) -> {
+            int shrink = (oldBottom - oldTop) - (bottom - top);
+            if (shrink != 0) scroll.scrollBy(0, shrink);
+            updateScrollButton();
+        });
         scrollArea.addView(scroll);
 
         // Floating down arrow, shown only when the transcript can scroll further down.
