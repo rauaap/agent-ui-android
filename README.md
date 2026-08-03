@@ -18,8 +18,10 @@ to install on a device).
   **never touches the disk**. A project whose directory has since been removed
   is flagged `MISSING`, and opening it offers to forget it.
 - **Session list** — the sessions inside one project: create, open, and delete.
-  Scoped to the project, so a new session takes a name and nothing else — no
-  path to type.
+  Scoped to the project, so there is no path to type, and the name arrives
+  pre-filled with a generated `adjective-noun` suggestion — creating a session
+  is two taps unless you want to name it yourself. Suggestions are not checked
+  for uniqueness; sessions are identified by id and duplicate names are fine.
 - **Live transcript** — streamed agent output, collapsible tool-use cards,
   inline approval prompts (Allow / Deny), and multiple-choice question prompts
   (Claude's AskUserQuestion) over a WebSocket that auto-reconnects.
@@ -58,6 +60,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `Prefs.java`               | `SharedPreferences`-backed server config |
 | `Api.java`                 | OkHttp REST client for `/projects` + `/sessions` |
 | `Session.java` / `Project.java` | session and project models |
+| `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
 | `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 
 ## Build

@@ -330,6 +330,11 @@ public class SessionListActivity extends Activity {
 
         content.addView(fieldLabel("Name"));
         EditText nameField = field("refactor db", InputType.TYPE_CLASS_TEXT, false);
+        // Generated per dialog, and selected so typing replaces it outright —
+        // the point is that creating a session needs no typing at all.
+        String suggestion = NameGenerator.suggest(this);
+        nameField.setText(suggestion);
+        nameField.setSelection(0, suggestion.length());
         content.addView(nameField);
 
         // No working-directory field: scoped, the path comes from the project.
