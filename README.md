@@ -28,7 +28,14 @@ to install on a device).
 - **Auto-approve** — per-session toggles in session settings to skip the approval
   prompt for writes and/or shell commands; auto-approved tools still appear in the
   transcript, marked as such. Reads always run.
-- **Composer** — send prompts; input locks while the agent is running.
+- **Composer** — send prompts. Stays usable while the agent is running: a prompt
+  sent mid-turn is refused with a toast, but a command still goes through.
+- **Bash mode** — a message starting with `!` runs as a shell command in the
+  session's working directory instead of going to the agent, and its output comes
+  back in a red-bordered card the agent never sees. `\!` sends a prompt that
+  really does start with an exclamation mark. While a `!` line is being typed the
+  composer turns red and switches to a monospace keyboard with sentence
+  capitalisation and suggestions off.
 - **Background notifications** — toggle the bell on a session to watch it from a
   foreground service. You get a high-priority notification when the task finishes
   or needs your approval, even with the app off-screen; the watch stops once the
@@ -61,6 +68,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `Api.java`                 | OkHttp REST client for `/projects` + `/sessions` |
 | `Session.java` / `Project.java` | session and project models |
 | `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
+| `Composer.java`            | the `!` / `\!` split — prompt or shell command (pure, unit tested) |
 | `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 
 ## Build
@@ -137,12 +145,16 @@ WebSocket: `ws(s)://<host>/ws/sessions/{id}`
 
 ```
 client -> server : { type: "input", text }
+                   { type: "bash",  command }
                    { type: "approval_response", request_id, behavior }
                    { type: "question_response", request_id, answers }
 
 server -> client : { type: "status",           status }   # idle | running | awaiting_approval
                    { type: "input",            text }
                    { type: "output",           text }
+                   { type: "bash_input",       command }
+                   { type: "bash_output",      command, stdout, stderr, exit_code,
+                                               duration_ms, timed_out, truncated }
                    { type: "tool_use",         tool, input }
                    { type: "approval_request", request_id, tool, input, category, auto_approved? }
                    { type: "approval_response", request_id, behavior, auto? }
@@ -161,6 +173,15 @@ pick back as `answers` (keyed by question text; a label, or array of labels for
 An `approval_request` with `auto_approved: true` was answered by a session toggle;
 the client renders it as a marker instead of Allow / Deny buttons, and the paired
 `approval_response` carries `auto: true`.
+
+`bash` runs a shell command in the session's working directory, bypassing the
+agent entirely — no tokens, no context, no approval. The `!` split is the
+client's: the server never inspects prompt text, which is what keeps a prompt
+beginning with `!` sendable. A command **never takes the turn lock**, so it runs
+while the agent is working and the composer is deliberately not gated on session
+status; the echo (`bash_input`) and the result (`bash_output`, which may arrive
+much later) render as one card. `exit_code` is null when the command never
+started. A second command while one is in flight comes back as an `error`.
 
 ## Notes
 

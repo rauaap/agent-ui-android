@@ -65,6 +65,8 @@ public class SessionActivity extends Activity {
     private TextView activity;
     private EditText input;
     private TextView sendBtn;
+    private LinearLayout composerBox; // the bordered frame around input + send
+    private boolean bashMode;         // the composer is showing command styling
 
     // socket
     private WebSocket socket;
@@ -87,6 +89,11 @@ public class SessionActivity extends Activity {
     private View lastToolCard;
     private String lastToolName;
     private JSONObject lastToolInput;
+    // The bash card still waiting for its output. A command runs alongside the
+    // agent, so its result can arrive several messages after the echo that
+    // opened the card — the card is rebuilt in place rather than appended.
+    private View pendingBashCard;
+    private String pendingBashCommand;
     // The first connection renders its replay straight into the visible transcript
     // (progressive, nothing to preserve). A reconnect instead assembles the replay
     // into a detached buffer and swaps it in only once it's complete, so a slow
@@ -252,6 +259,7 @@ public class SessionActivity extends Activity {
         footer.addView(activity);
 
         LinearLayout composer = Widgets.row(this);
+        composerBox = composer;
         composer.setGravity(Gravity.BOTTOM);
         composer.setBackground(Theme.rounded(this, Theme.PANEL, 18, Theme.LINE, 1));
         int cp = Theme.dp(this, 8);
@@ -264,9 +272,14 @@ public class SessionActivity extends Activity {
         input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         input.setBackground(null);
         input.setGravity(Gravity.CENTER_VERTICAL);
-        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT
-                | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        input.setInputType(promptInputType());
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                applyComposerMode();
+            }
+        });
         input.setMaxLines(6);
         input.setMinHeight(Theme.dp(this, 44));
         int ip = Theme.dp(this, 8);
@@ -294,8 +307,60 @@ public class SessionActivity extends Activity {
     }
 
     /* ---------------------------------------------------------------- */
-    /* status                                                           */
+    /* composer mode                                                    */
     /* ---------------------------------------------------------------- */
+
+    private static int promptInputType() {
+        return android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
+    }
+
+    /**
+     * A command is not prose: sentence capitalisation turns {@code ls} into
+     * {@code Ls} and the suggestion strip is noise over a path. Bash mode drops
+     * both. NO_SUGGESTIONS is only a hint — Gboard and AOSP honour it, some
+     * third-party IMEs ignore it — but losing CAP_SENTENCES is universal, and
+     * that is the flag that actually corrupts commands.
+     */
+    private static int bashInputType() {
+        return android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+    }
+
+    /**
+     * Say what pressing send will do. A `!` line goes to the shell, not to the
+     * agent, so the composer turns red and switches to a monospace, autocorrect-
+     * free keyboard while one is being typed.
+     *
+     * Only fires on the transition. Reapplying the input type on every keystroke
+     * would restart the IME under the user's fingers.
+     */
+    private void applyComposerMode() {
+        boolean bash = Composer.isBash(input.getText().toString());
+        if (bash == bashMode) return;
+        bashMode = bash;
+
+        composerBox.setBackground(Theme.rounded(
+                this, Theme.PANEL, 18, bash ? Theme.DANGER_LINE : Theme.LINE, 1));
+        input.setHint(bash ? "Run a shell command…" : "Message the agent…");
+
+        // setInputType resets the typeface and can move the cursor, so restore
+        // both, then tell the running IME to pick the new flags up — without
+        // restartInput a keyboard that is already open keeps autocorrecting.
+        int start = input.getSelectionStart();
+        int end = input.getSelectionEnd();
+        input.setInputType(bash ? bashInputType() : promptInputType());
+        input.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        input.setTypeface(bash ? Typeface.MONOSPACE : Typeface.DEFAULT);
+        int length = input.getText().length();
+        input.setSelection(Math.min(Math.max(start, 0), length), Math.min(Math.max(end, 0), length));
+
+        android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) imm.restartInput(input);
+    }
 
     /* ---------------------------------------------------------------- */
     /* notifications                                                    */
@@ -343,9 +408,9 @@ public class SessionActivity extends Activity {
         if (busy && notifyOn) {
             WatchService.watch(this, sessionId, sessionName, s);
         }
-        input.setEnabled(!busy);
-        sendBtn.setEnabled(!busy);
-        sendBtn.setAlpha(busy ? 0.4f : 1f);
+        // The composer stays live while the agent works: a `!` command never
+        // takes the server's turn lock, so it can run mid-turn. A prompt sent
+        // now is turned away in sendPrompt() with a toast instead.
         stopBtn.setVisibility(busy ? View.VISIBLE : View.GONE);
 
         if ("running".equals(s)) {
@@ -404,6 +469,8 @@ public class SessionActivity extends Activity {
             pendingApprovalId = null;
             pendingQuestionCard = null;
             pendingQuestionId = null;
+            pendingBashCard = null;
+            pendingBashCommand = null;
             clearLastTool();
         }
 
@@ -517,6 +584,15 @@ public class SessionActivity extends Activity {
             case "question_response":
                 resolveQuestion(msg.optString("request_id", ""), msg.optJSONObject("answers"));
                 break;
+            // Bash mode: the echo opens a card, the result fills it in.
+            case "bash_input":
+                agentBubble = null;
+                clearLastTool();
+                addBashCommand(msg.optString("command", ""));
+                break;
+            case "bash_output":
+                fillBashOutput(msg.optString("command", ""), msg);
+                break;
             case "done":
                 agentBubble = null;
                 clearLastTool();
@@ -535,10 +611,14 @@ public class SessionActivity extends Activity {
     /* transcript rendering                                             */
     /* ---------------------------------------------------------------- */
 
-    private void append(View v) {
+    private LinearLayout.LayoutParams rowParams() {
         LinearLayout.LayoutParams p = lp(MATCH, WRAP);
         p.bottomMargin = Theme.dp(this, 14);
-        transcript.addView(v, p);
+        return p;
+    }
+
+    private void append(View v) {
+        transcript.addView(v, rowParams());
         scrollToBottom();
     }
 
@@ -699,6 +779,153 @@ public class SessionActivity extends Activity {
         lastToolCard = null;
         lastToolName = null;
         lastToolInput = null;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* bash mode                                                        */
+    /* ---------------------------------------------------------------- */
+
+    private void addBashCommand(String command) {
+        View card = bashCard(command, null);
+        append(card);
+        pendingBashCard = card;
+        pendingBashCommand = command;
+    }
+
+    private void fillBashOutput(String command, JSONObject result) {
+        if (pendingBashCard != null && command.equals(pendingBashCommand)) {
+            int index = transcript.indexOfChild(pendingBashCard);
+            pendingBashCard = null;
+            pendingBashCommand = null;
+            if (index >= 0) {
+                // Rebuilt where it already sits, rather than appended: a command
+                // that finishes mid-turn must not land below — or interrupt —
+                // the agent message still streaming underneath it.
+                transcript.removeViewAt(index);
+                transcript.addView(bashCard(command, result), index, rowParams());
+                scrollToBottom();
+                return;
+            }
+        }
+        // No card to fill in — a replay that began past the echo, or a command
+        // another client started before we connected. It stands on its own.
+        agentBubble = null;
+        clearLastTool();
+        append(bashCard(command, result));
+    }
+
+    /**
+     * A `!` command and what it printed. Bordered in red rather than the
+     * conversation's terracotta: the agent neither ran this nor ever sees the
+     * output. The body is selectable monospace with a COPY chip, so it can be
+     * lifted into a prompt if you decide the agent should see it after all.
+     *
+     * @param result the {@code bash_output} payload, or null while it runs
+     */
+    private LinearLayout bashCard(String command, JSONObject result) {
+        LinearLayout wrap = Widgets.column(this);
+        wrap.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.DANGER_LINE, 1));
+
+        LinearLayout head = Widgets.row(this);
+        head.setGravity(Gravity.TOP);
+        int hp = Theme.dp(this, 11);
+        head.setPadding(hp, Theme.dp(this, 9), hp, Theme.dp(this, 9));
+
+        TextView prompt = Widgets.mono(this, "$", Theme.DANGER, 12.5f);
+        Widgets.margins(prompt, 0, 0, Theme.dp(this, 8), 0);
+        TextView cmd = Widgets.mono(this, command, Theme.INK, 12.5f);
+        cmd.setTextIsSelectable(true);
+        cmd.setLayoutParams(lp(0, WRAP, 1f));
+        head.addView(prompt);
+        head.addView(cmd);
+        if (result != null) {
+            // The output, not the command: pasting what a command printed into a
+            // prompt is the whole point of running one here.
+            TextView copy = copyChip(bashOutputText(result));
+            if (copy != null) {
+                Widgets.margins(copy, Theme.dp(this, 8), 0, 0, 0);
+                head.addView(copy);
+            }
+        }
+        wrap.addView(head);
+
+        boolean waiting = result == null;
+        TextView out = Widgets.mono(this,
+                waiting ? "running…" : bashBody(result),
+                waiting ? Theme.FAINT : 0xFFD4CFE0, 12.5f);
+        out.setTextIsSelectable(true);
+        HorizontalScrollView body = new HorizontalScrollView(this);
+        body.addView(out, lp(WRAP, WRAP));
+        int bp = Theme.dp(this, 12);
+        body.setPadding(bp, bp, bp, bp);
+        body.setBackgroundColor(0x40000000);
+        wrap.addView(body);
+
+        if (result != null) {
+            TextView meta = Widgets.text(this, bashStatus(result),
+                    bashFailed(result) ? Theme.DANGER : Theme.FAINT, 11, false);
+            meta.setPadding(hp, Theme.dp(this, 6), hp, Theme.dp(this, 8));
+            wrap.addView(meta);
+        }
+        return wrap;
+    }
+
+    /** stdout, then stderr in the danger colour — one block of selectable text. */
+    private static CharSequence bashBody(JSONObject result) {
+        String out = jsonString(result, "stdout");
+        String err = jsonString(result, "stderr");
+        if (out.isEmpty() && err.isEmpty()) return "(no output)";
+        if (err.isEmpty()) return out;
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+        if (!out.isEmpty()) {
+            sb.append(out);
+            if (!out.endsWith("\n")) sb.append('\n');
+        }
+        int start = sb.length();
+        sb.append(err);
+        sb.setSpan(new android.text.style.ForegroundColorSpan(Theme.DANGER),
+                start, sb.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return sb;
+    }
+
+    /** The same two streams unstyled, which is what a copy should hand over. */
+    private static String bashOutputText(JSONObject result) {
+        String out = jsonString(result, "stdout");
+        String err = jsonString(result, "stderr");
+        if (out.isEmpty()) return err;
+        if (err.isEmpty()) return out;
+        return out.endsWith("\n") ? out + err : out + "\n" + err;
+    }
+
+    /** How the command ended, and how long it took getting there. */
+    private static String bashStatus(JSONObject result) {
+        StringBuilder sb = new StringBuilder();
+        // A null exit code means it never started — most often a working
+        // directory deleted out from under the session.
+        sb.append(result.isNull("exit_code")
+                ? "did not start" : "exit " + result.optInt("exit_code"));
+        if (!result.isNull("duration_ms")) {
+            long ms = result.optLong("duration_ms", -1);
+            if (ms >= 0) {
+                sb.append(" · ").append(ms < 1000
+                        ? ms + " ms"
+                        : String.format(java.util.Locale.US, "%.1f s", ms / 1000.0));
+            }
+        }
+        if (result.optBoolean("timed_out", false)) sb.append(" · timed out");
+        if (result.optBoolean("truncated", false)) sb.append(" · output truncated");
+        return sb.toString();
+    }
+
+    private static boolean bashFailed(JSONObject result) {
+        return result.isNull("exit_code")
+                || result.optInt("exit_code") != 0
+                || result.optBoolean("timed_out", false);
+    }
+
+    /** optString renders an explicit JSON null as the text "null"; this doesn't. */
+    private static String jsonString(JSONObject o, String key) {
+        return o == null || o.isNull(key) ? "" : o.optString(key, "");
     }
 
     private void addApprovalRequest(JSONObject msg) {
@@ -1352,16 +1579,37 @@ public class SessionActivity extends Activity {
     /* sending                                                          */
     /* ---------------------------------------------------------------- */
 
+    private boolean isBusy() {
+        return "running".equals(status) || "awaiting_approval".equals(status);
+    }
+
     private void sendPrompt() {
-        if (!input.isEnabled()) return;
-        String text = input.getText().toString().trim();
-        if (text.isEmpty() || socket == null) return;
+        Composer parsed = Composer.parse(input.getText().toString());
+        if (parsed == null || socket == null) return;
         try {
             JSONObject out = new JSONObject();
-            out.put("type", "input");
-            out.put("text", text);
+            if (parsed.bash) {
+                // Nothing typed after the `!` yet.
+                if (parsed.text.isEmpty()) return;
+                // Deliberately not gated on status: bash never takes the turn
+                // lock server-side, so a command runs while the agent works.
+                out.put("type", "bash");
+                out.put("command", parsed.text);
+            } else {
+                if (isBusy()) {
+                    // Rejected, but the text stays put: it is still worth sending
+                    // once the turn ends, and it may be what you meant to run.
+                    android.widget.Toast.makeText(this,
+                            "The agent is busy — wait for the turn to finish, or prefix with ! to run a command",
+                            android.widget.Toast.LENGTH_LONG).show();
+                    return;
+                }
+                out.put("type", "input");
+                out.put("text", parsed.text);
+            }
             if (socket.send(out.toString())) {
                 input.setText("");
+                applyComposerMode();
             }
         } catch (Exception ignored) {}
     }
