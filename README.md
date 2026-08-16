@@ -22,6 +22,18 @@ to install on a device).
   pre-filled with a generated `adjective-noun` suggestion — creating a session
   is two taps unless you want to name it yourself. Suggestions are not checked
   for uniqueness; sessions are identified by id and duplicate names are fine.
+- **Git worktrees** — a toggle in the new-session dialog, shown for projects
+  that are git repositories, runs the session in its own worktree on a new
+  branch instead of sharing the project directory. Both the directory (a
+  sibling of the project, `…/app-fix-login`) and the branch (`fix-login`) are
+  seeded from the session name and editable, after which they stop tracking it.
+  The worktree is created as part of creating the session: if git refuses, the
+  dialog stays open with git's reason and **no session is created**. Such
+  sessions are tagged `WORKTREE` in the list and show their directory.
+  Deleting one removes the worktree too — but never with `--force`, so a
+  worktree holding uncommitted *or untracked* files is left on disk and
+  reported. That is the common outcome for a session that did any work, and it
+  reads as a notice rather than an error.
 - **Live transcript** — streamed agent output, collapsible tool-use cards,
   inline approval prompts (Allow / Deny), and multiple-choice question prompts
   (Claude's AskUserQuestion) over a WebSocket that auto-reconnects.
@@ -69,6 +81,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `Session.java` / `Project.java` | session and project models |
 | `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
 | `Composer.java`            | the `!` / `\!` split — prompt or shell command (pure, unit tested) |
+| `Worktree.java`            | worktree directory + branch seeds from a session name (pure, unit tested) |
 | `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 
 ## Build
@@ -118,14 +131,19 @@ is the protocol this client speaks to it.
 
 REST: `GET /projects`, `POST /projects`, `DELETE /projects`, `GET /sessions`,
 `POST /sessions`, `PATCH /sessions/{id}`, `DELETE /sessions/{id}`,
-`POST /sessions/{id}/stop`.
+`POST /sessions/{id}/stop`. There is no worktree endpoint: a worktree is
+created and destroyed as part of the session that owns it.
 
-`GET /projects` returns `[{ path, name, exists, session_count, last_active_at }]`,
-where `last_active_at` is `null` for a project with no sessions yet and `exists`
-reports whether the directory is still on the server's disk. There are no nested
-project routes: `GET /sessions` carries `working_dir` on every row, so the client
-filters locally. A **404 means an older server** — the app then falls back to the
-unscoped session list, i.e. its pre-projects behaviour.
+`GET /projects` returns
+`[{ id, path, name, exists, is_git_repo, session_count, last_active_at }]`, where
+`last_active_at` is `null` for a project with no sessions yet, `exists` reports
+whether the directory is still on the server's disk, and `is_git_repo` is a hint
+for whether to offer the worktree toggle. There are no nested project routes:
+`GET /sessions` carries `project_id` on every row, so the client filters
+locally — on the id, not the path, because a worktree session's `working_dir`
+is somewhere else entirely. A **404 means an older server** — the app then falls
+back to the unscoped session list, i.e. its pre-projects behaviour, and to
+matching sessions by `working_dir`.
 
 `POST /projects` body: `{ path, name }` — path absolute; creates the directory
 and the row, so a new project lists immediately. On a 404 the app opens the
@@ -133,10 +151,27 @@ project anyway and lets the first session's `mkdir -p` create the directory.
 
 `DELETE /projects` body: `{ path }` — removes the project and its sessions,
 leaving the directory alone. The path is in the body, not the URL, so no
-filesystem path has to be encoded into a path segment.
+filesystem path has to be encoded into a path segment. The response adds
+`worktrees_removed` and `worktree_errors: [{ session, path, error }]` for the
+sessions that owned one.
 
-`POST /sessions` body: `{ name, working_dir, agent }`. Creating a session is
-also what creates the project directory (`mkdir -p` server-side).
+`POST /sessions` body: `{ name, project_path, agent, worktree? }`, where
+`worktree` is `{ path, branch }`. The project must already exist — an unknown
+`project_path` is a 404, not an adopted project. With a `worktree` block the
+server creates the worktree first and rolls it back if the session insert
+fails, so the two can never disagree about who owns the directory; any failure
+along the way is a 400 and no session. The client also sends the path as
+`working_dir`, the deprecated spelling of `project_path`, so the same request
+works against a server on either side of the rename.
+
+Sessions come back with `project_id`, `working_dir` (the cwd — the worktree
+when there is one) and `owns_worktree` (the server created it and will remove
+it).
+
+`DELETE /sessions/{id}` returns `{ status, worktree_removed, worktree_error }`.
+It is **200 even when `worktree_error` is set**: the session is deleted either
+way, and removal is never forced, so a worktree with modified or untracked
+files is reported and left alone.
 
 `PATCH /sessions/{id}` body (all optional): `{ name, auto_approve_write,
 auto_approve_command }` — rename and/or flip the per-session auto-approve toggles.

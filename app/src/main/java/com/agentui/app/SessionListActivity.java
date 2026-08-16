@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -36,8 +37,10 @@ import static com.agentui.app.Widgets.lp;
  */
 public class SessionListActivity extends Activity {
 
+    static final String EXTRA_PROJECT_ID = "project_id";
     static final String EXTRA_PROJECT_DIR = "project_dir";
     static final String EXTRA_PROJECT_NAME = "project_name";
+    static final String EXTRA_PROJECT_IS_REPO = "project_is_repo";
 
     private Api api;
     private Prefs prefs;
@@ -47,6 +50,10 @@ public class SessionListActivity extends Activity {
     /** Working directory this list is scoped to, or null when unscoped. */
     private String projectDir;
     private String projectName;
+    /** The project's server-side id; empty against a server that has none. */
+    private String projectId;
+    /** Whether the project directory is a git repo, so worktrees are on offer. */
+    private boolean projectIsRepo;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,6 +62,9 @@ public class SessionListActivity extends Activity {
         prefs = api.prefs();
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
         projectName = getIntent().getStringExtra(EXTRA_PROJECT_NAME);
+        projectId = getIntent().getStringExtra(EXTRA_PROJECT_ID);
+        if (projectId == null) projectId = "";
+        projectIsRepo = getIntent().getBooleanExtra(EXTRA_PROJECT_IS_REPO, false);
         if (projectName == null && projectDir != null) {
             projectName = ProjectListActivity.basename(projectDir);
         }
@@ -184,14 +194,23 @@ public class SessionListActivity extends Activity {
 
     /**
      * Keep only this project's sessions. The REST API stays flat — every row
-     * already carries {@code working_dir}, so grouping happens here rather than
-     * in a nested route that would have to path-encode a filesystem path.
+     * carries the link, so grouping happens here rather than in a nested route
+     * that would have to path-encode a filesystem path.
+     *
+     * <p>The link is {@code project_id}: a session running in a worktree has a
+     * {@code working_dir} somewhere else entirely, and matching on the path
+     * would drop it out of the list it belongs to. Path matching survives only
+     * as the fallback for a server old enough not to send an id, which is also
+     * a server old enough to have no worktrees.
      */
     private List<Session> scopeToProject(List<Session> sessions) {
         if (projectDir == null) return sessions;
         List<Session> out = new ArrayList<>();
         for (Session s : sessions) {
-            if (projectDir.equals(s.workingDir)) out.add(s);
+            boolean mine = !projectId.isEmpty() && !s.projectId.isEmpty()
+                    ? projectId.equals(s.projectId)
+                    : projectDir.equals(s.workingDir);
+            if (mine) out.add(s);
         }
         return out;
     }
@@ -275,17 +294,30 @@ public class SessionListActivity extends Activity {
         head.addView(actions);
         card.addView(head);
 
-        // path — redundant inside a project, where every session shares it
-        if (projectDir == null) {
+        // Path — redundant inside a project, where sessions share the project's
+        // directory. A worktree session does not, so its cwd is always shown,
+        // tagged, so it is obvious the session is not running at the root.
+        boolean elsewhere = projectDir == null || !projectDir.equals(s.workingDir);
+        if (elsewhere) {
+            LinearLayout where = Widgets.row(this);
+            if (s.ownsWorktree) {
+                TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
+                Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+                where.addView(tag);
+            }
             TextView path = Widgets.mono(this, s.workingDir, Theme.FAINT, 12);
-            Widgets.margins(path, 0, Theme.dp(this, 10), 0, 0);
-            card.addView(path);
+            path.setSingleLine(true);
+            path.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+            path.setLayoutParams(lp(0, WRAP, 1f));
+            where.addView(path);
+            Widgets.margins(where, 0, Theme.dp(this, 10), 0, 0);
+            card.addView(where);
         }
 
         // meta
         String meta = formatAgent(s.agent) + "  ·  " + formatTime(s.lastActiveAt);
         TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
-        Widgets.margins(metaView, 0, Theme.dp(this, projectDir == null ? 8 : 10), 0, 0);
+        Widgets.margins(metaView, 0, Theme.dp(this, elsewhere ? 8 : 10), 0, 0);
         card.addView(metaView);
 
         return card;
@@ -296,6 +328,7 @@ public class SessionListActivity extends Activity {
         i.putExtra(SessionActivity.EXTRA_ID, s.id);
         i.putExtra(SessionActivity.EXTRA_NAME, s.name);
         i.putExtra(SessionActivity.EXTRA_DIR, s.workingDir);
+        i.putExtra(SessionActivity.EXTRA_WORKTREE, s.ownsWorktree);
         i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
         i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
         i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
@@ -303,14 +336,37 @@ public class SessionListActivity extends Activity {
     }
 
     private void confirmDelete(Session s) {
+        String message = "Delete session \"" + s.name + "\"? This removes its history.";
+        if (s.ownsWorktree) {
+            message += "\n\nIts worktree at " + s.workingDir + " is removed too, "
+                    + "unless it still holds uncommitted or untracked files.";
+        }
         new AlertDialog.Builder(this)
                 .setTitle("Delete session")
-                .setMessage("Delete session \"" + s.name + "\"? This removes its history.")
+                .setMessage(message)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Delete", (d, w) -> api.deleteSession(s.id, new Api.Cb<Void>() {
-                    @Override public void onResult(Void value) { loadSessions(); }
+                .setPositiveButton("Delete", (d, w) -> api.deleteSession(s.id, new Api.Cb<Api.Deletion>() {
+                    @Override public void onResult(Api.Deletion deletion) {
+                        loadSessions();
+                        if (deletion.worktreeError != null) showWorktreeLeftDialog(s, deletion);
+                    }
                     @Override public void onError(String message) { toast("Unable to delete: " + message); }
                 }))
+                .show();
+    }
+
+    /**
+     * The session is gone; its worktree is not. Removal is never forced, and
+     * git counts untracked files as dirty, so this is the expected outcome for
+     * any session that created a file — a notice, not a failure.
+     */
+    private void showWorktreeLeftDialog(Session s, Api.Deletion deletion) {
+        new AlertDialog.Builder(this)
+                .setTitle("Worktree left in place")
+                .setMessage("The session was deleted, but its worktree still has "
+                        + "uncommitted or untracked files and was left on disk:\n\n"
+                        + s.workingDir + "\n\n" + deletion.worktreeError)
+                .setPositiveButton("OK", null)
                 .show();
     }
 
@@ -366,6 +422,49 @@ public class SessionListActivity extends Activity {
                 .show());
         content.addView(agent);
 
+        // ---- worktree ----
+        // Only offered for a project the server reports as a git repo: anywhere
+        // else `git worktree add` would refuse, and the toggle would be an
+        // invitation to a 400. The server checks again for real.
+        final Switch worktreeSwitch = new Switch(this);
+        final EditText pathField = field("/projects/app-fix-login",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI, true);
+        final EditText branchField = field("fix-login", InputType.TYPE_CLASS_TEXT, false);
+
+        if (projectDir != null && projectIsRepo) {
+            content.addView(spacer(22));
+            LinearLayout worktreeRow = Widgets.row(this);
+            TextView worktreeLabel = Widgets.text(this, "Create a git worktree", Theme.INK, 15, false);
+            worktreeLabel.setLayoutParams(lp(0, WRAP, 1f));
+            worktreeRow.addView(worktreeLabel);
+            worktreeRow.addView(worktreeSwitch);
+            content.addView(worktreeRow);
+
+            TextView worktreeHint = Widgets.text(this,
+                    "Run this session in its own checkout on a new branch, so it "
+                            + "doesn't share the project directory with other sessions.",
+                    Theme.MUTED, 12.5f, false);
+            Widgets.margins(worktreeHint, 0, Theme.dp(this, 7), 0, 0);
+            content.addView(worktreeHint);
+
+            // The inputs live in their own block so the toggle can hide them
+            // whole, rather than leaving two disabled fields taking up space.
+            LinearLayout worktreeFields = Widgets.column(this);
+            worktreeFields.setVisibility(View.GONE);
+            worktreeFields.addView(spacer(14));
+            worktreeFields.addView(fieldLabel("Worktree directory"));
+            worktreeFields.addView(pathField);
+            worktreeFields.addView(spacer(14));
+            worktreeFields.addView(fieldLabel("Branch"));
+            worktreeFields.addView(branchField);
+            content.addView(worktreeFields);
+
+            seedFromName(nameField, pathField, n -> Worktree.pathFor(projectDir, n));
+            seedFromName(nameField, branchField, Worktree::slug);
+            worktreeSwitch.setOnCheckedChangeListener((b, checked) ->
+                    worktreeFields.setVisibility(checked ? View.VISIBLE : View.GONE));
+        }
+
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("New session")
                 .setView(wrapScroll(content))
@@ -380,19 +479,78 @@ public class SessionListActivity extends Activity {
                 return;
             }
             String dir = projectDir != null ? projectDir : fallbackDir(name);
+
+            String worktreePath = null;
+            String branch = null;
+            if (worktreeSwitch.isChecked()) {
+                worktreePath = trimTrailingSlashes(pathField.getText().toString().trim());
+                branch = branchField.getText().toString().trim();
+                if (worktreePath.isEmpty() || branch.isEmpty()) {
+                    toast("Worktree directory and branch are required");
+                    return;
+                }
+                if (!worktreePath.startsWith("/")) {
+                    toast("Worktree directory must be an absolute path");
+                    return;
+                }
+            }
+
             v.setEnabled(false);
-            api.createSession(name, dir, AGENT_IDS[agentIdx[0]], new Api.Cb<Session>() {
-                @Override public void onResult(Session session) {
-                    dialog.dismiss();
-                    openSession(session);
-                }
-                @Override public void onError(String message) {
-                    v.setEnabled(true);
-                    toast("Unable to create: " + message);
-                }
-            });
+            // A worktree that could not be created means no session at all, so
+            // the dialog stays open with the server's reason rather than
+            // dropping the user into a session that runs somewhere unexpected.
+            api.createSession(name, dir, AGENT_IDS[agentIdx[0]], worktreePath, branch,
+                    new Api.Cb<Session>() {
+                        @Override public void onResult(Session session) {
+                            dialog.dismiss();
+                            openSession(session);
+                        }
+                        @Override public void onError(String message) {
+                            v.setEnabled(true);
+                            toast("Unable to create: " + message);
+                        }
+                    });
         }));
         dialog.show();
+    }
+
+    private interface Seed { String from(String name); }
+
+    /**
+     * Keep {@code target} tracking the session name, until the user edits it by
+     * hand — after which the two are independent. The same
+     * seed-then-break-the-link pattern the new-project dialog uses for the name
+     * and the directory it fills in.
+     */
+    private void seedFromName(EditText nameField, EditText target, Seed seed) {
+        final boolean[] edited = {false};
+        final boolean[] programmatic = {false};
+        target.setText(seed.from(nameField.getText().toString()));
+        target.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                if (!programmatic[0]) edited[0] = true;
+            }
+            @Override public void afterTextChanged(android.text.Editable s) {}
+        });
+        nameField.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                if (edited[0]) return;
+                programmatic[0] = true;
+                target.setText(seed.from(s.toString()));
+                programmatic[0] = false;
+            }
+            @Override public void afterTextChanged(android.text.Editable s) {}
+        });
+    }
+
+    /** A trailing slash would make the path look unlike the one we get back. */
+    private static String trimTrailingSlashes(String path) {
+        while (path.length() > 1 && path.endsWith("/")) {
+            path = path.substring(0, path.length() - 1);
+        }
+        return path;
     }
 
     /**

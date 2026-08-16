@@ -39,6 +39,7 @@ public class SessionActivity extends Activity {
     static final String EXTRA_ID = "id";
     static final String EXTRA_NAME = "name";
     static final String EXTRA_DIR = "dir";
+    static final String EXTRA_WORKTREE = "worktree";
     static final String EXTRA_STATUS = "status";
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
@@ -109,13 +110,14 @@ public class SessionActivity extends Activity {
         sessionId = getIntent().getStringExtra(EXTRA_ID);
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
         String dir = getIntent().getStringExtra(EXTRA_DIR);
+        boolean worktree = getIntent().getBooleanExtra(EXTRA_WORKTREE, false);
         status = getIntent().getStringExtra(EXTRA_STATUS);
         if (status == null) status = "idle";
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
         autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
         notifyOn = api.prefs().notifyEnabled(sessionId);
 
-        setContentView(buildRoot(sessionName, dir));
+        setContentView(buildRoot(sessionName, dir, worktree));
         applyStatus(status);
         connect();
     }
@@ -148,7 +150,7 @@ public class SessionActivity extends Activity {
     /* layout                                                           */
     /* ---------------------------------------------------------------- */
 
-    private View buildRoot(String name, String dir) {
+    private View buildRoot(String name, String dir, boolean worktree) {
         LinearLayout root = Widgets.column(this);
         root.setBackgroundColor(Theme.BG);
         root.setLayoutParams(lp(MATCH, MATCH));
@@ -172,11 +174,21 @@ public class SessionActivity extends Activity {
         nameView.setMaxLines(1);
         nameView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         headings.addView(nameView);
+        // The cwd, tagged when it is a worktree the server made for this
+        // session rather than the project's own directory.
+        LinearLayout where = Widgets.row(this);
+        if (worktree) {
+            TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
+            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+            where.addView(tag);
+        }
         TextView dirView = Widgets.mono(this, dir == null ? "" : dir, Theme.FAINT, 12);
         dirView.setMaxLines(1);
         dirView.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        Widgets.margins(dirView, 0, Theme.dp(this, 2), 0, 0);
-        headings.addView(dirView);
+        dirView.setLayoutParams(lp(0, WRAP, 1f));
+        where.addView(dirView);
+        Widgets.margins(where, 0, Theme.dp(this, 2), 0, 0);
+        headings.addView(where);
         header.addView(headings);
 
         ImageView gearBtn = new ImageView(this);

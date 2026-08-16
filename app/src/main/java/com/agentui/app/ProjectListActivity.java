@@ -224,16 +224,7 @@ public class ProjectListActivity extends Activity {
         name.setLayoutParams(lp(0, WRAP, 1f));
         head.addView(name);
 
-        if (!p.exists) {
-            TextView missing = Widgets.text(this, "MISSING", Theme.DANGER, 10, true);
-            missing.setAllCaps(true);
-            missing.setLetterSpacing(0.05f);
-            missing.setBackground(Theme.pill(this, Theme.DANGER_SOFT, Theme.DANGER_LINE, 1));
-            int padH = Theme.dp(this, 10);
-            int padV = Theme.dp(this, 4);
-            missing.setPadding(padH, padV, padH, padV);
-            head.addView(missing);
-        }
+        if (!p.exists) head.addView(Widgets.tag(this, "missing", Theme.DANGER));
 
         TextView del = Widgets.text(this, "🗑", Theme.MUTED, 15, false);
         int dp32 = Theme.dp(this, 32);
@@ -267,9 +258,19 @@ public class ProjectListActivity extends Activity {
             showMissingDirectoryDialog(p);
             return;
         }
-        openProjectDir(p.path, p.name);
+        Intent i = new Intent(this, SessionListActivity.class);
+        i.putExtra(SessionListActivity.EXTRA_PROJECT_ID, p.id);
+        i.putExtra(SessionListActivity.EXTRA_PROJECT_DIR, p.path);
+        i.putExtra(SessionListActivity.EXTRA_PROJECT_NAME, p.name);
+        i.putExtra(SessionListActivity.EXTRA_PROJECT_IS_REPO, p.isGitRepo);
+        startActivity(i);
     }
 
+    /**
+     * Back-compat path: a server with no {@code POST /projects} has no project
+     * row to identify either, so the session list falls back to matching on the
+     * directory.
+     */
     private void openProjectDir(String path, String name) {
         Intent i = new Intent(this, SessionListActivity.class);
         i.putExtra(SessionListActivity.EXTRA_PROJECT_DIR, path);
@@ -473,12 +474,33 @@ public class ProjectListActivity extends Activity {
     }
 
     private void deleteProject(Project p) {
-        api.deleteProject(p.path, new Api.Cb<Void>() {
-            @Override public void onResult(Void value) { loadProjects(); }
+        api.deleteProject(p.path, new Api.Cb<Api.ProjectDeletion>() {
+            @Override public void onResult(Api.ProjectDeletion deletion) {
+                loadProjects();
+                if (!deletion.worktreeErrors.isEmpty()) showWorktreesLeftDialog(deletion);
+            }
             @Override public void onError(String message) {
                 toast("Unable to delete: " + message);
             }
         });
+    }
+
+    /**
+     * The project is gone; some of its worktrees are not. Removal is never
+     * forced, and git counts untracked files as dirty, so any session that
+     * created a file leaves one behind — a notice, not an error.
+     */
+    private void showWorktreesLeftDialog(Api.ProjectDeletion deletion) {
+        int n = deletion.worktreeErrors.size();
+        StringBuilder message = new StringBuilder(n == 1
+                ? "One worktree had uncommitted or untracked files and was left on disk:\n"
+                : n + " worktrees had uncommitted or untracked files and were left on disk:\n");
+        for (String error : deletion.worktreeErrors) message.append("\n").append(error);
+        new AlertDialog.Builder(this)
+                .setTitle("Worktrees left in place")
+                .setMessage(message.toString())
+                .setPositiveButton("OK", null)
+                .show();
     }
 
     private void toast(String msg) {

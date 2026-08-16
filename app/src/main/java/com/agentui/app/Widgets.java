@@ -74,6 +74,22 @@ final class Widgets {
         return t;
     }
 
+    /**
+     * A small pill label — the status badge's shape without its status
+     * vocabulary, for markers like MISSING or WORKTREE.
+     */
+    static TextView tag(Context ctx, String label, int color) {
+        TextView t = text(ctx, label, color, 10, true);
+        t.setAllCaps(true);
+        t.setLetterSpacing(0.05f);
+        t.setBackground(Theme.pill(ctx,
+                Theme.withAlpha(color, 0x22), Theme.withAlpha(color, 0x66), 1));
+        int padH = Theme.dp(ctx, 10);
+        int padV = Theme.dp(ctx, 4);
+        t.setPadding(padH, padV, padH, padV);
+        return t;
+    }
+
     /** Primary (accent) button. */
     static TextView primaryButton(Context ctx, String label) {
         return button(ctx, label, 0xFF1A0F0A, Theme.ACCENT, Theme.ACCENT, 0);
