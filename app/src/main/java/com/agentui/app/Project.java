@@ -8,7 +8,10 @@ import org.json.JSONObject;
  * HTTP API still addresses one by {@code path}: the id is what sessions link to.
  */
 final class Project {
-    /** Server-side uuid. Empty from a server old enough not to send one. */
+    /**
+     * Server-side id — a JSON number kept as an opaque string, never parsed
+     * back or compared as one. Empty from a server old enough not to send one.
+     */
     final String id;
     final String path;
     final String name;
@@ -40,7 +43,8 @@ final class Project {
         String lastActive = o.isNull("last_active_at")
                 ? "" : o.optString("last_active_at", "");
         return new Project(
-                o.optString("id", ""),
+                // A JSON number, held as a string; see Json.
+                Json.id(o, "id"),
                 o.optString("path", ""),
                 o.optString("name", "(unnamed)"),
                 o.optInt("session_count", 0),

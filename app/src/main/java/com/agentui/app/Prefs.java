@@ -55,7 +55,15 @@ final class Prefs {
     /* per-session notification opt-in                                   */
     /* ----------------------------------------------------------------- */
 
-    /** Whether completion notifications are enabled for this session (default off). */
+    /**
+     * Whether completion notifications are enabled for this session (default
+     * off).
+     *
+     * <p>Membership, not resolution: an id in the set that no longer exists
+     * server-side simply never matches, so the opt-in fails closed. The set
+     * survived a server migration that renumbered every session, which is
+     * exactly the case this has to be safe for.
+     */
     boolean notifyEnabled(String sessionId) {
         return sessionId != null && notifySessions().contains(sessionId);
     }
@@ -66,11 +74,22 @@ final class Prefs {
         Set<String> set = new HashSet<>(notifySessions());
         if (enabled) set.add(sessionId);
         else set.remove(sessionId);
-        sp.edit().putStringSet(KEY_NOTIFY, set).apply();
+        sp.edit().putStringSet(notifyKey(), set).apply();
     }
 
     private Set<String> notifySessions() {
-        return sp.getStringSet(KEY_NOTIFY, Collections.emptySet());
+        return sp.getStringSet(notifyKey(), Collections.emptySet());
+    }
+
+    /**
+     * The opt-in set is per server. Ids are small integers now, so the same id
+     * names a different session on a different backend — one global set would
+     * have a saved "3" silently switching notifications on for whatever session
+     * 3 happens to be after the address changes. Within one server ids are
+     * never reused, so a stale entry there is inert.
+     */
+    private String notifyKey() {
+        return KEY_NOTIFY + ":" + authority();
     }
 
     /** e.g. "192.168.1.50:8080" */

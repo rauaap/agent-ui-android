@@ -272,9 +272,17 @@ final class Api {
     private static String serverError(int code, String body) {
         try {
             JSONObject o = new JSONObject(body);
-            String detail = o.optString("detail", "");
-            if (!detail.isEmpty()) return detail;
+            // The app's own errors put a sentence in `detail`. FastAPI's
+            // validation errors put a list of objects there, and optString
+            // would hand back the whole array as raw JSON — not something to
+            // show a user.
+            Object detail = o.opt("detail");
+            if (detail instanceof String && !((String) detail).isEmpty()) return (String) detail;
         } catch (Exception ignored) {}
+        // Session routes type their {id} as an int, so a malformed id is
+        // rejected before the handler runs: 422, not the 404 that means the
+        // session is gone. Either way it is our bug, not a missing session.
+        if (code == 422) return "Server rejected the request (bad id)";
         return "Server error " + code;
     }
 

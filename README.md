@@ -51,7 +51,10 @@ to install on a device).
 - **Background notifications** — toggle the bell on a session to watch it from a
   foreground service. You get a high-priority notification when the task finishes
   or needs your approval, even with the app off-screen; the watch stops once the
-  turn ends and is silent for whichever session you're currently viewing.
+  turn ends and is silent for whichever session you're currently viewing. The
+  opt-in is remembered per session **per server address**: ids are only unique
+  within one backend, so pointing the app elsewhere starts from a clean set
+  rather than inheriting whatever wore the same id there.
 - **Settings** — the server host / port (and optional TLS) plus the projects
   directory are stored in `SharedPreferences`, so they **persist across app
   restarts and device reboots**. Set them via the ⚙ button on the project list.
@@ -79,6 +82,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `Prefs.java`               | `SharedPreferences`-backed server config |
 | `Api.java`                 | OkHttp REST client for `/projects` + `/sessions` |
 | `Session.java` / `Project.java` | session and project models |
+| `Json.java`                | id decoding — server ids are JSON numbers, held as opaque strings (pure, unit tested) |
 | `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
 | `Composer.java`            | the `!` / `\!` split — prompt or shell command (pure, unit tested) |
 | `Worktree.java`            | worktree directory + branch seeds from a session name (pure, unit tested) |
@@ -133,6 +137,17 @@ REST: `GET /projects`, `POST /projects`, `DELETE /projects`, `GET /sessions`,
 `POST /sessions`, `PATCH /sessions/{id}`, `DELETE /sessions/{id}`,
 `POST /sessions/{id}/stop`. There is no worktree endpoint: a worktree is
 created and destroyed as part of the session that owns it.
+
+**Ids.** `projects.id`, `sessions.id` and `project_id` are JSON **numbers** —
+they were uuid strings until a server migration renumbered every row. The app
+decodes them through `Json.id` and then treats them as opaque strings
+everywhere: URL segments, Intent extras, map keys. Never parse one back, order
+two, or truncate one for display. The ids minted elsewhere — `request_id`,
+`agent_session_id`, and the `id` inside an approval option — are strings on
+every server and stay that way. Session routes type their `{id}` as an int, so
+a malformed one is a **422** (our bug) rather than the 404 that means the
+session is gone; ids are never reused, so a cached one is either valid or gone,
+never a different session.
 
 `GET /projects` returns
 `[{ id, path, name, exists, is_git_repo, session_count, last_active_at }]`, where

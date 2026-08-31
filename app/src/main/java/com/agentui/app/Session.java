@@ -4,6 +4,11 @@ import org.json.JSONObject;
 
 /** A single agent session, as returned by the backend's /sessions endpoints. */
 final class Session {
+    /**
+     * Server-side id — a JSON number kept as an opaque string, and used as one
+     * throughout: a URL segment, an Intent extra, a map key. Never parsed back
+     * into a number, ordered, or truncated for display.
+     */
     final String id;
     final String name;
     /**
@@ -47,9 +52,10 @@ final class Session {
 
     static Session from(JSONObject o) {
         return new Session(
-                o.optString("id", ""),
+                // Ids arrive as JSON numbers and are held as strings; see Json.
+                Json.id(o, "id"),
                 o.optString("name", "(unnamed)"),
-                o.optString("project_id", ""),
+                Json.id(o, "project_id"),
                 o.optString("working_dir", ""),
                 o.optBoolean("owns_worktree", false),
                 o.optString("agent", "claude-code"),
