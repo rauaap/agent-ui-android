@@ -18,6 +18,7 @@ final class Prefs {
     private static final String KEY_TLS  = "server_tls";
     private static final String KEY_NOTIFY = "notify_sessions";
     private static final String KEY_DEFAULT_DIR = "default_working_dir";
+    private static final String KEY_WORKTREE_TEMPLATE = "worktree_path_template";
 
     private static final String DEFAULT_DIR = "/projects/";
 
@@ -38,12 +39,25 @@ final class Prefs {
      */
     String defaultDir() { return sp.getString(KEY_DEFAULT_DIR, DEFAULT_DIR); }
 
-    void save(String host, int port, boolean tls, String defaultDir) {
+    /**
+     * Template for a new worktree's directory, expanded against the project and
+     * the branch in the create-worktree form. Purely client-side — the server
+     * only ever sees the finished path. See {@link WorktreePath#expand}.
+     */
+    String worktreeTemplate() {
+        String t = sp.getString(KEY_WORKTREE_TEMPLATE, WorktreePath.DEFAULT_TEMPLATE);
+        // A template cleared to nothing would expand to nothing, so it falls
+        // back rather than seeding an empty path field.
+        return (t == null || t.trim().isEmpty()) ? WorktreePath.DEFAULT_TEMPLATE : t.trim();
+    }
+
+    void save(String host, int port, boolean tls, String defaultDir, String worktreeTemplate) {
         sp.edit()
                 .putString(KEY_HOST, host.trim())
                 .putInt(KEY_PORT, port)
                 .putBoolean(KEY_TLS, tls)
                 .putString(KEY_DEFAULT_DIR, defaultDir.trim())
+                .putString(KEY_WORKTREE_TEMPLATE, worktreeTemplate.trim())
                 .apply();
     }
 

@@ -9,6 +9,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -88,6 +89,45 @@ final class Widgets {
         int padV = Theme.dp(ctx, 4);
         t.setPadding(padH, padV, padH, padV);
         return t;
+    }
+
+    /** The small caption above a form input. */
+    static TextView fieldLabel(Context ctx, String s) {
+        TextView t = text(ctx, s, Theme.MUTED, 13, true);
+        margins(t, 0, 0, 0, Theme.dp(ctx, 7));
+        return t;
+    }
+
+    /** A single-line form input in the app's panel styling. */
+    static EditText field(Context ctx, String hint, int inputType, boolean mono) {
+        EditText e = new EditText(ctx);
+        e.setHint(hint);
+        e.setInputType(inputType);
+        e.setTextColor(Theme.INK);
+        e.setHintTextColor(Theme.FAINT);
+        e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        if (mono) e.setTypeface(Typeface.MONOSPACE);
+        e.setSingleLine(true);
+        e.setBackground(Theme.rounded(ctx, Theme.PANEL2, 10, Theme.LINE, 1));
+        int p = Theme.dp(ctx, 12);
+        e.setPadding(p, 0, p, 0);
+        e.setMinHeight(Theme.dp(ctx, 44));
+        e.setLayoutParams(lp(MATCH, WRAP));
+        return e;
+    }
+
+    /** A path input: monospace, and no autocorrect chewing on the slashes. */
+    static EditText pathField(Context ctx, String hint) {
+        return field(ctx, hint,
+                android.text.InputType.TYPE_CLASS_TEXT
+                        | android.text.InputType.TYPE_TEXT_VARIATION_URI,
+                true);
+    }
+
+    static View spacer(Context ctx, int dp) {
+        View v = new View(ctx);
+        v.setLayoutParams(lp(MATCH, Theme.dp(ctx, dp)));
+        return v;
     }
 
     /** Primary (accent) button. */

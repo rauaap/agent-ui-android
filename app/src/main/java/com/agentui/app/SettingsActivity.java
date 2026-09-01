@@ -30,7 +30,16 @@ public class SettingsActivity extends Activity {
     private EditText portField;
     private Switch tlsSwitch;
     private EditText defaultDirField;
+    private EditText templateField;
     private TextView preview;
+    private TextView templatePreview;
+
+    /**
+     * Settings has no project in hand, so the template example is expanded
+     * against a stand-in and labelled as one.
+     */
+    private static final String EXAMPLE_PROJECT = "/projects/app";
+    private static final String EXAMPLE_BRANCH = "fix-login";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,6 +47,7 @@ public class SettingsActivity extends Activity {
         prefs = new Prefs(this);
         setContentView(buildRoot());
         updatePreview();
+        updateTemplatePreview();
     }
 
     private View buildRoot() {
@@ -123,6 +133,35 @@ public class SettingsActivity extends Activity {
         Widgets.margins(dirHint, 0, Theme.dp(this, 7), 0, 0);
         form.addView(dirHint);
 
+        form.addView(spacer(28));
+        TextView worktreeSection = Widgets.text(this, "Worktrees", Theme.ACCENT_STRONG, 12, true);
+        worktreeSection.setAllCaps(true);
+        worktreeSection.setLetterSpacing(0.06f);
+        form.addView(worktreeSection);
+        form.addView(spacer(12));
+
+        form.addView(label("Worktree path template"));
+        templateField = field(prefs.worktreeTemplate(), WorktreePath.DEFAULT_TEMPLATE,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI, true);
+        form.addView(templateField);
+        TextView templateHint = Widgets.text(this,
+                "Fills in the directory when you create a worktree; you can still "
+                        + "edit it there.\n"
+                        + "%P  the project's parent directory\n"
+                        + "%N  the project directory's own name\n"
+                        + "%B  the branch, slashes turned into dashes\n"
+                        + "%b  the branch exactly as typed",
+                Theme.MUTED, 12.5f, false);
+        Widgets.margins(templateHint, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(templateHint);
+
+        form.addView(spacer(12));
+        templatePreview = Widgets.mono(this, "", Theme.MUTED, 13);
+        templatePreview.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
+        templatePreview.setPadding(pp, pp, pp, pp);
+        templatePreview.setLayoutParams(lp(MATCH, WRAP));
+        form.addView(templatePreview);
+
         form.addView(spacer(24));
         TextView save = Widgets.primaryButton(this, "Save");
         save.setMinimumHeight(Theme.dp(this, 48));
@@ -142,6 +181,13 @@ public class SettingsActivity extends Activity {
         hostField.addTextChangedListener(watcher);
         portField.addTextChangedListener(watcher);
         tlsSwitch.setOnCheckedChangeListener((CompoundButton b, boolean c) -> updatePreview());
+        templateField.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                updateTemplatePreview();
+            }
+            @Override public void afterTextChanged(android.text.Editable s) {}
+        });
 
         return root;
     }
@@ -161,6 +207,13 @@ public class SettingsActivity extends Activity {
                 + wsScheme + "://" + authority + "/ws/sessions/{id}");
     }
 
+    private void updateTemplatePreview() {
+        String template = templateField.getText().toString();
+        templatePreview.setText("Example — project " + EXAMPLE_PROJECT
+                + ", branch " + EXAMPLE_BRANCH + ":\n"
+                + WorktreePath.expand(template, EXAMPLE_PROJECT, EXAMPLE_BRANCH));
+    }
+
     private void save() {
         String host = hostField.getText().toString().trim();
         String portStr = portField.getText().toString().trim();
@@ -176,7 +229,8 @@ public class SettingsActivity extends Activity {
             toast("Enter a valid port (1–65535)");
             return;
         }
-        prefs.save(host, port, tlsSwitch.isChecked(), defaultDirField.getText().toString());
+        prefs.save(host, port, tlsSwitch.isChecked(), defaultDirField.getText().toString(),
+                templateField.getText().toString());
         toast("Saved");
         finish();
     }

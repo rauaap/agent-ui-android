@@ -1,68 +1,83 @@
 package com.agentui.app;
 
+import org.json.JSONObject;
+
 /**
- * Where a session's git worktree goes, and what its branch is called.
+ * A git worktree of a project, as returned by the backend's /worktrees
+ * endpoints.
  *
- * Both are seeded from the session name and then editable — the same
- * seed-then-break-the-link pattern the new-project dialog uses for name vs
- * directory. The seed is deliberately conservative: ASCII letters, digits and
- * single dashes, which is both a legal branch name and a path that needs no
- * quoting.
- *
- * Pure and framework-free so it can be unit tested on the JVM, like
- * {@link Composer}.
+ * <p>A worktree is its own resource: created and removed through its own
+ * endpoints, shared by any number of sessions, and outliving all of them. It
+ * used to be something a session created and destroyed, which is why a session
+ * now carries a {@link Session#worktreeId} rather than an "owns it" flag.
  */
 final class Worktree {
-    private Worktree() {}
-
-    /** Cap on a seeded slug. git allows far more; a path stays readable. */
-    private static final int MAX_SLUG = 48;
-
-    /** Used when a name slugs away to nothing — "!!!", or a non-Latin script. */
-    private static final String FALLBACK = "session";
-
     /**
-     * A session name reduced to a branch-safe, path-safe token:
-     * {@code "Fix login!"} becomes {@code "fix-login"}.
-     *
-     * <p>Runs of anything else collapse to one dash and never lead or trail, so
-     * the result cannot trip {@code git check-ref-format} — which is the
-     * authority, server-side, on whatever the user types instead.
+     * Server-side id — a JSON number kept as an opaque string, like every other
+     * id in this app. See {@link Json}.
      */
-    static String slug(String name) {
-        if (name == null) return FALLBACK;
-        StringBuilder out = new StringBuilder();
-        boolean gap = false;
-        for (int i = 0; i < name.length() && out.length() < MAX_SLUG; i++) {
-            char c = Character.toLowerCase(name.charAt(i));
-            boolean keep = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-            if (!keep) {
-                gap = true;
-                continue;
-            }
-            if (gap && out.length() > 0) out.append('-');
-            gap = false;
-            out.append(c);
-        }
-        return out.length() == 0 ? FALLBACK : out.toString();
+    final String id;
+    /** The project this worktree belongs to; a session may not cross projects. */
+    final String projectId;
+    /** The worktree directory, absolute and lexically normalised server-side. */
+    final String path;
+    /**
+     * The branch the worktree was <em>created on</em>, empty when the server
+     * has none — a row carried over by its migration. Not live state: an agent
+     * working in the worktree can switch branches and nothing here notices,
+     * which is why the UI says "created on" rather than naming it flatly.
+     */
+    final String branch;
+    /**
+     * How many sessions run in this worktree. Zero is an ordinary state — an
+     * unused worktree still there to attach to — not a leak.
+     */
+    final int sessionCount;
+    /**
+     * Whether the directory is still on disk, {@code stat}ed at request time.
+     * False means it was removed outside the app: attaching a session still
+     * succeeds server-side but the session fails on its first turn, and the
+     * useful move is to clean the row away.
+     */
+    final boolean exists;
+    final String createdAt;
+
+    Worktree(String id, String projectId, String path, String branch,
+             int sessionCount, boolean exists, String createdAt) {
+        this.id = id;
+        this.projectId = projectId;
+        this.path = path;
+        this.branch = branch;
+        this.sessionCount = sessionCount;
+        this.exists = exists;
+        this.createdAt = createdAt;
     }
 
-    /**
-     * A sibling of the project directory named after the session: project
-     * {@code /home/me/app} plus session "fix login" gives
-     * {@code /home/me/app-fix-login}.
-     *
-     * <p>Beside the project rather than inside it, so the worktree is not part
-     * of the tree the agent is working on.
-     */
-    static String pathFor(String projectDir, String name) {
-        String base = projectDir == null ? "" : projectDir.trim();
-        while (base.length() > 1 && base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
+    static Worktree from(JSONObject o) {
+        // branch is null for a migrated worktree, and optString would hand back
+        // the literal "null" for it.
+        String branch = o.isNull("branch") ? "" : o.optString("branch", "");
+        return new Worktree(
+                // Ids arrive as JSON numbers and are held as strings; see Json.
+                Json.id(o, "id"),
+                Json.id(o, "project_id"),
+                o.optString("path", ""),
+                branch,
+                o.optInt("session_count", 0),
+                // Default true: a server that does not report it must not make
+                // every worktree look broken.
+                o.optBoolean("exists", true),
+                o.optString("created_at", ""));
+    }
+
+    /** "created on fix-login · 2 sessions", skipping whichever part is absent. */
+    String subtitle() {
+        StringBuilder s = new StringBuilder();
+        if (!branch.isEmpty()) s.append("created on ").append(branch);
+        if (sessionCount > 0) {
+            if (s.length() > 0) s.append("  ·  ");
+            s.append(sessionCount).append(sessionCount == 1 ? " session" : " sessions");
         }
-        String slug = slug(name);
-        // Nothing to hang a suffix on: neither "" nor "/" has a last segment.
-        if (base.isEmpty() || base.equals("/")) return "/" + slug;
-        return base + "-" + slug;
+        return s.toString();
     }
 }

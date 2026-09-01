@@ -19,14 +19,15 @@ final class Session {
     final String projectId;
     /**
      * The directory the agent runs in. The project's own directory normally,
-     * but a worktree of it when {@link #ownsWorktree} is set.
+     * the worktree's when {@link #worktreeId} is set. Computed server-side.
      */
     final String workingDir;
     /**
-     * Whether the server created {@link #workingDir} as a git worktree and will
-     * remove it with the session. A worktree the user made by hand reads false.
+     * The worktree this session runs in, or empty for the project directory. A
+     * worktree is its own resource now: several sessions can share one, and it
+     * outlives them — deleting this session removes nothing from disk.
      */
-    final boolean ownsWorktree;
+    final String worktreeId;
     final String agent;
     String status;
     final String lastActiveAt;
@@ -35,14 +36,14 @@ final class Session {
     boolean autoApproveWrite;
     boolean autoApproveCommand;
 
-    Session(String id, String name, String projectId, String workingDir, boolean ownsWorktree,
+    Session(String id, String name, String projectId, String workingDir, String worktreeId,
             String agent, String status, String lastActiveAt,
             boolean autoApproveWrite, boolean autoApproveCommand) {
         this.id = id;
         this.name = name;
         this.projectId = projectId;
         this.workingDir = workingDir;
-        this.ownsWorktree = ownsWorktree;
+        this.worktreeId = worktreeId;
         this.agent = agent;
         this.status = status;
         this.lastActiveAt = lastActiveAt;
@@ -57,7 +58,9 @@ final class Session {
                 o.optString("name", "(unnamed)"),
                 Json.id(o, "project_id"),
                 o.optString("working_dir", ""),
-                o.optBoolean("owns_worktree", false),
+                // null for a session that runs in the project directory, which
+                // Json.id reads as empty.
+                Json.id(o, "worktree_id"),
                 o.optString("agent", "claude-code"),
                 o.optString("status", "idle"),
                 o.optString("last_active_at", ""),

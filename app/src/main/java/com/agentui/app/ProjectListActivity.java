@@ -487,14 +487,15 @@ public class ProjectListActivity extends Activity {
 
     /**
      * The project is gone; some of its worktrees are not. Removal is never
-     * forced, and git counts untracked files as dirty, so any session that
-     * created a file leaves one behind — a notice, not an error.
+     * forced, and git counts untracked files as dirty, so any worktree an agent
+     * did real work in stays — a notice, in the same category as the project's
+     * own directory being left alone, not an error.
      */
     private void showWorktreesLeftDialog(Api.ProjectDeletion deletion) {
         int n = deletion.worktreeErrors.size();
         StringBuilder message = new StringBuilder(n == 1
-                ? "One worktree had uncommitted or untracked files and was left on disk:\n"
-                : n + " worktrees had uncommitted or untracked files and were left on disk:\n");
+                ? "One worktree had uncommitted work and was left in place:\n"
+                : n + " worktrees had uncommitted work and were left in place:\n");
         for (String error : deletion.worktreeErrors) message.append("\n").append(error);
         new AlertDialog.Builder(this)
                 .setTitle("Worktrees left in place")

@@ -35,6 +35,25 @@ final class Json {
     }
 
     /**
+     * The value to send back for an id held as a string — a {@link Long} when
+     * it is all digits, the string itself otherwise.
+     *
+     * <p>The one place a number is parsed out of an id, and deliberately so:
+     * this is the boundary where an id goes back onto the wire, and the server
+     * types the fields that carry one ({@code worktree_id}) as ints. A uuid
+     * from a pre-migration server has no numeric form and passes through
+     * unchanged. Nothing downstream of this treats the result as a quantity.
+     */
+    static Object wire(String id) {
+        if (id == null) return null;
+        try {
+            return Long.valueOf(id);
+        } catch (NumberFormatException e) {
+            return id;
+        }
+    }
+
+    /**
      * The string form of one already-decoded id value. Split out from
      * {@link #id} so the conversion is testable off-device, where org.json is
      * not available.

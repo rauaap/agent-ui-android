@@ -3,17 +3,16 @@ package com.agentui.app;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
-import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -54,6 +53,20 @@ public class SessionListActivity extends Activity {
     private String projectId;
     /** Whether the project directory is a git repo, so worktrees are on offer. */
     private boolean projectIsRepo;
+    /**
+     * The project's worktrees, refreshed with the session list. Kept here
+     * because three things want them: the picker in the new-session dialog, the
+     * count on the way into the worktree screen, and the note shown when the
+     * last session using one is deleted.
+     */
+    private final List<Worktree> worktrees = new ArrayList<>();
+    /**
+     * Cleared when a server 404s on {@code /worktrees}, i.e. one predating them
+     * — the picker and the worktree screen then stay out of the way entirely.
+     */
+    private boolean worktreesSupported = true;
+    /** The sessions currently on screen, so a worktree load can re-render them. */
+    private List<Session> lastSessions;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -184,11 +197,42 @@ public class SessionListActivity extends Activity {
 
     private void loadSessions() {
         sessionCount.setText("…");
+        loadWorktrees();
         api.listSessions(new Api.Cb<List<Session>>() {
             @Override public void onResult(List<Session> sessions) {
                 renderList(scopeToProject(sessions), null);
             }
             @Override public void onError(String message) { renderList(null, message); }
+        });
+    }
+
+    /**
+     * The project's worktrees, for the picker and the header row. A failure is
+     * silent: the session list is what this screen is for, and the picker's
+     * fallback — "Project directory", plus the form itself — still works.
+     */
+    private void loadWorktrees() {
+        if (projectDir == null || !projectIsRepo || !worktreesSupported) return;
+        api.listWorktrees(projectDir, new Api.StatusCb<List<Worktree>>() {
+            @Override public void onResult(List<Worktree> list) {
+                worktrees.clear();
+                worktrees.addAll(list);
+                // The header row counts them, and the list is already on screen
+                // by the time this lands as often as not.
+                if (lastSessions != null) renderList(lastSessions, null);
+            }
+
+            @Override public void onError(String message) {}
+
+            @Override public void onHttpError(int code, String message) {
+                // A server old enough to create worktrees only as part of a
+                // session has no /worktrees at all. Stop asking, and stop
+                // offering a picker whose every option would 404.
+                if (code == 404) {
+                    worktreesSupported = false;
+                    worktrees.clear();
+                }
+            }
         });
     }
 
@@ -227,13 +271,19 @@ public class SessionListActivity extends Activity {
         listContainer.removeAllViews();
 
         if (error != null) {
+            lastSessions = null;
             sessionCount.setText("unreachable");
             listContainer.addView(emptyBox(error + "\n\nCheck the server address in Settings."));
             return;
         }
 
+        lastSessions = sessions;
         int n = sessions.size();
         sessionCount.setText(n + (n == 1 ? " session" : " sessions"));
+
+        if (projectDir != null && projectIsRepo && worktreesSupported) {
+            listContainer.addView(worktreeRow());
+        }
 
         if (n == 0) {
             listContainer.addView(emptyBox(projectDir != null
@@ -243,6 +293,35 @@ public class SessionListActivity extends Activity {
         }
 
         for (Session s : sessions) listContainer.addView(sessionCard(s));
+    }
+
+    /**
+     * Way into the worktree screen. Worktrees are a project's, not a session's,
+     * so they are listed beside the sessions rather than inside one — and this
+     * is the only place a worktree can be cleaned up from.
+     */
+    private View worktreeRow() {
+        LinearLayout row = Widgets.row(this);
+        row.setBackground(Theme.rounded(this, Theme.PANEL, 12, Theme.LINE, 1));
+        int padH = Theme.dp(this, 14);
+        int padV = Theme.dp(this, 12);
+        row.setPadding(padH, padV, padH, padV);
+        LinearLayout.LayoutParams rowLp = lp(MATCH, WRAP);
+        rowLp.bottomMargin = Theme.dp(this, 12);
+        row.setLayoutParams(rowLp);
+        row.setClickable(true);
+        row.setOnClickListener(v ->
+                startActivity(WorktreeListActivity.intent(this, projectDir, projectName)));
+
+        TextView label = Widgets.text(this, "Worktrees", Theme.INK, 14, true);
+        label.setLayoutParams(lp(0, WRAP, 1f));
+        row.addView(label);
+        int n = worktrees.size();
+        row.addView(Widgets.text(this, n == 0 ? "none" : String.valueOf(n), Theme.MUTED, 13, false));
+        TextView chevron = Widgets.text(this, "›", Theme.FAINT, 18, false);
+        Widgets.margins(chevron, Theme.dp(this, 10), 0, 0, 0);
+        row.addView(chevron);
+        return row;
     }
 
     private LinearLayout emptyBox(String message) {
@@ -300,7 +379,7 @@ public class SessionListActivity extends Activity {
         boolean elsewhere = projectDir == null || !projectDir.equals(s.workingDir);
         if (elsewhere) {
             LinearLayout where = Widgets.row(this);
-            if (s.ownsWorktree) {
+            if (!s.worktreeId.isEmpty()) {
                 TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
                 Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
                 where.addView(tag);
@@ -328,7 +407,7 @@ public class SessionListActivity extends Activity {
         i.putExtra(SessionActivity.EXTRA_ID, s.id);
         i.putExtra(SessionActivity.EXTRA_NAME, s.name);
         i.putExtra(SessionActivity.EXTRA_DIR, s.workingDir);
-        i.putExtra(SessionActivity.EXTRA_WORKTREE, s.ownsWorktree);
+        i.putExtra(SessionActivity.EXTRA_WORKTREE, !s.worktreeId.isEmpty());
         i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
         i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
         i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
@@ -336,38 +415,53 @@ public class SessionListActivity extends Activity {
     }
 
     private void confirmDelete(Session s) {
+        // Deleting a session touches nothing on disk: its worktree belongs to
+        // the project and stays, along with any other session using it.
         String message = "Delete session \"" + s.name + "\"? This removes its history.";
-        if (s.ownsWorktree) {
-            message += "\n\nIts worktree at " + s.workingDir + " is removed too, "
-                    + "unless it still holds uncommitted or untracked files.";
+        if (!s.worktreeId.isEmpty()) {
+            message += "\n\nThe worktree at " + s.workingDir + " stays where it is.";
         }
         new AlertDialog.Builder(this)
                 .setTitle("Delete session")
                 .setMessage(message)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Delete", (d, w) -> api.deleteSession(s.id, new Api.Cb<Api.Deletion>() {
-                    @Override public void onResult(Api.Deletion deletion) {
+                .setPositiveButton("Delete", (d, w) -> api.deleteSession(s.id, new Api.Cb<Void>() {
+                    @Override public void onResult(Void ignored) {
+                        boolean wasLast = wasLastSessionOnWorktree(s);
                         loadSessions();
-                        if (deletion.worktreeError != null) showWorktreeLeftDialog(s, deletion);
+                        if (wasLast) showWorktreeRemainsDialog(s);
                     }
                     @Override public void onError(String message) { toast("Unable to delete: " + message); }
                 }))
                 .show();
     }
 
+    /** Whether {@code s} was the only session left in its worktree, if it had one. */
+    private boolean wasLastSessionOnWorktree(Session s) {
+        if (s.worktreeId.isEmpty() || lastSessions == null) return false;
+        for (Session other : lastSessions) {
+            if (!other.id.equals(s.id) && s.worktreeId.equals(other.worktreeId)) return false;
+        }
+        return true;
+    }
+
     /**
-     * The session is gone; its worktree is not. Removal is never forced, and
-     * git counts untracked files as dirty, so this is the expected outcome for
-     * any session that created a file — a notice, not a failure.
+     * The last session using a worktree is gone; the worktree is not. Said so
+     * the worktree does not feel abandoned — not a nudge to delete it, since
+     * finishing a session does not mean finishing with the branch.
      */
-    private void showWorktreeLeftDialog(Session s, Api.Deletion deletion) {
-        new AlertDialog.Builder(this)
-                .setTitle("Worktree left in place")
-                .setMessage("The session was deleted, but its worktree still has "
-                        + "uncommitted or untracked files and was left on disk:\n\n"
-                        + s.workingDir + "\n\n" + deletion.worktreeError)
-                .setPositiveButton("OK", null)
-                .show();
+    private void showWorktreeRemainsDialog(Session s) {
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle("Session deleted")
+                .setMessage("Its worktree is still there:\n\n" + s.workingDir
+                        + "\n\nStart another session in it, or clean it up from Worktrees.")
+                .setNegativeButton("OK", null);
+        // The worktree screen is per project, so it needs one to open in.
+        if (projectDir != null) {
+            b.setPositiveButton("Worktrees", (d, w) ->
+                    startActivity(WorktreeListActivity.intent(this, projectDir, projectName)));
+        }
+        b.show();
     }
 
     /* ---------------------------------------------------------------- */
@@ -405,12 +499,7 @@ public class SessionListActivity extends Activity {
         content.addView(spacer(14));
         content.addView(fieldLabel("Agent"));
         final int[] agentIdx = {0};
-        TextView agent = Widgets.text(this, AGENT_LABELS[agentIdx[0]], Theme.INK, 15, false);
-        agent.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
-        int fp = Theme.dp(this, 12);
-        agent.setPadding(fp, 0, fp, 0);
-        agent.setGravity(Gravity.CENTER_VERTICAL);
-        agent.setMinimumHeight(Theme.dp(this, 44));
+        TextView agent = selector(AGENT_LABELS[agentIdx[0]]);
         agent.setOnClickListener(av -> new AlertDialog.Builder(this)
                 .setTitle("Agent")
                 .setSingleChoiceItems(AGENT_LABELS, agentIdx[0], (d, which) -> {
@@ -424,45 +513,29 @@ public class SessionListActivity extends Activity {
 
         // ---- worktree ----
         // Only offered for a project the server reports as a git repo: anywhere
-        // else `git worktree add` would refuse, and the toggle would be an
-        // invitation to a 400. The server checks again for real.
-        final Switch worktreeSwitch = new Switch(this);
-        final EditText pathField = field("/projects/app-fix-login",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI, true);
-        final EditText branchField = field("fix-login", InputType.TYPE_CLASS_TEXT, false);
-
-        if (projectDir != null && projectIsRepo) {
-            content.addView(spacer(22));
-            LinearLayout worktreeRow = Widgets.row(this);
-            TextView worktreeLabel = Widgets.text(this, "Create a git worktree", Theme.INK, 15, false);
-            worktreeLabel.setLayoutParams(lp(0, WRAP, 1f));
-            worktreeRow.addView(worktreeLabel);
-            worktreeRow.addView(worktreeSwitch);
-            content.addView(worktreeRow);
-
+        // else `git worktree add` would refuse, and the picker's every option
+        // would be an invitation to a 400. The server checks again for real.
+        //
+        // Empty means the project directory, which is the default and needs no
+        // worktree_id at all.
+        final String[] worktreeId = {""};
+        final TextView worktreePicker;
+        if (projectDir != null && projectIsRepo && worktreesSupported) {
+            content.addView(spacer(14));
+            content.addView(fieldLabel("Run in"));
+            worktreePicker = selector(PROJECT_DIRECTORY);
+            content.addView(worktreePicker);
             TextView worktreeHint = Widgets.text(this,
-                    "Run this session in its own checkout on a new branch, so it "
-                            + "doesn't share the project directory with other sessions.",
+                    "The project directory, or one of its worktrees — a separate "
+                            + "checkout on its own branch. Sharing one with another "
+                            + "session is fine.",
                     Theme.MUTED, 12.5f, false);
             Widgets.margins(worktreeHint, 0, Theme.dp(this, 7), 0, 0);
             content.addView(worktreeHint);
-
-            // The inputs live in their own block so the toggle can hide them
-            // whole, rather than leaving two disabled fields taking up space.
-            LinearLayout worktreeFields = Widgets.column(this);
-            worktreeFields.setVisibility(View.GONE);
-            worktreeFields.addView(spacer(14));
-            worktreeFields.addView(fieldLabel("Worktree directory"));
-            worktreeFields.addView(pathField);
-            worktreeFields.addView(spacer(14));
-            worktreeFields.addView(fieldLabel("Branch"));
-            worktreeFields.addView(branchField);
-            content.addView(worktreeFields);
-
-            seedFromName(nameField, pathField, n -> Worktree.pathFor(projectDir, n));
-            seedFromName(nameField, branchField, Worktree::slug);
-            worktreeSwitch.setOnCheckedChangeListener((b, checked) ->
-                    worktreeFields.setVisibility(checked ? View.VISIBLE : View.GONE));
+            worktreePicker.setOnClickListener(v ->
+                    chooseWorktree(nameField, worktreePicker, worktreeId));
+        } else {
+            worktreePicker = null;
         }
 
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -480,77 +553,172 @@ public class SessionListActivity extends Activity {
             }
             String dir = projectDir != null ? projectDir : fallbackDir(name);
 
-            String worktreePath = null;
-            String branch = null;
-            if (worktreeSwitch.isChecked()) {
-                worktreePath = trimTrailingSlashes(pathField.getText().toString().trim());
-                branch = branchField.getText().toString().trim();
-                if (worktreePath.isEmpty() || branch.isEmpty()) {
-                    toast("Worktree directory and branch are required");
-                    return;
-                }
-                if (!worktreePath.startsWith("/")) {
-                    toast("Worktree directory must be an absolute path");
-                    return;
-                }
-            }
-
             v.setEnabled(false);
-            // A worktree that could not be created means no session at all, so
-            // the dialog stays open with the server's reason rather than
-            // dropping the user into a session that runs somewhere unexpected.
-            api.createSession(name, dir, AGENT_IDS[agentIdx[0]], worktreePath, branch,
-                    new Api.Cb<Session>() {
+            api.createSession(name, dir, AGENT_IDS[agentIdx[0]], worktreeId[0],
+                    new Api.StatusCb<Session>() {
                         @Override public void onResult(Session session) {
                             dialog.dismiss();
                             openSession(session);
                         }
+
                         @Override public void onError(String message) {
                             v.setEnabled(true);
                             toast("Unable to create: " + message);
+                        }
+
+                        @Override public void onHttpError(int code, String message) {
+                            v.setEnabled(true);
+                            toast("Unable to create: " + message);
+                            // A worktree removed since the picker was filled: no
+                            // session was created, so the selection is reset to
+                            // somewhere that still exists and the list refreshed.
+                            // A 404 naming the project instead is a different
+                            // problem, and resetting the picker would not help.
+                            if (code == 404 && message.contains("Worktree")) {
+                                selectWorktree(worktreePicker, worktreeId, null);
+                                loadWorktrees();
+                            }
                         }
                     });
         }));
         dialog.show();
     }
 
-    private interface Seed { String from(String name); }
+    /* ---------------------------------------------------------------- */
+    /* worktree picker                                                  */
+    /* ---------------------------------------------------------------- */
+
+    /** The picker's default: no worktree at all, i.e. no {@code worktree_id}. */
+    private static final String PROJECT_DIRECTORY = "Project directory";
 
     /**
-     * Keep {@code target} tracking the session name, until the user edits it by
-     * hand — after which the two are independent. The same
-     * seed-then-break-the-link pattern the new-project dialog uses for the name
-     * and the directory it fills in.
+     * Pick where the session runs: the project directory, one of its worktrees,
+     * or a worktree created on the spot — which the form then selects, since
+     * creating one from here is only ever a step towards using it.
      */
-    private void seedFromName(EditText nameField, EditText target, Seed seed) {
-        final boolean[] edited = {false};
-        final boolean[] programmatic = {false};
-        target.setText(seed.from(nameField.getText().toString()));
-        target.addTextChangedListener(new android.text.TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
-                if (!programmatic[0]) edited[0] = true;
-            }
-            @Override public void afterTextChanged(android.text.Editable s) {}
-        });
-        nameField.addTextChangedListener(new android.text.TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
-                if (edited[0]) return;
-                programmatic[0] = true;
-                target.setText(seed.from(s.toString()));
-                programmatic[0] = false;
-            }
-            @Override public void afterTextChanged(android.text.Editable s) {}
-        });
+    private void chooseWorktree(EditText nameField, TextView picker, String[] worktreeId) {
+        List<CharSequence> labels = new ArrayList<>();
+        labels.add(PROJECT_DIRECTORY);
+        int checked = 0;
+        for (int i = 0; i < worktrees.size(); i++) {
+            Worktree w = worktrees.get(i);
+            labels.add(pickerLabel(w));
+            if (w.id.equals(worktreeId[0])) checked = i + 1;
+        }
+        final int newIndex = labels.size();
+        labels.add("New worktree…");
+
+        new AlertDialog.Builder(this)
+                .setTitle("Run in")
+                .setSingleChoiceItems(twoLineChoices(labels), checked, (d, which) -> {
+                    d.dismiss();
+                    if (which == 0) {
+                        selectWorktree(picker, worktreeId, null);
+                        return;
+                    }
+                    if (which == newIndex) {
+                        // The session name is the branch seed, the same way it
+                        // seeds the name of everything else here.
+                        WorktreeForm.show(this, api, projectDir,
+                                nameField.getText().toString(), created -> {
+                                    mergeWorktree(created);
+                                    selectWorktree(picker, worktreeId, created);
+                                });
+                        return;
+                    }
+                    Worktree w = worktrees.get(which - 1);
+                    if (!w.exists) confirmMissingDirectory(w, picker, worktreeId);
+                    else selectWorktree(picker, worktreeId, w);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
-    /** A trailing slash would make the path look unlike the one we get back. */
-    private static String trimTrailingSlashes(String path) {
-        while (path.length() > 1 && path.endsWith("/")) {
-            path = path.substring(0, path.length() - 1);
+    /**
+     * The full path, then what is worth knowing about it. Sharing a worktree
+     * with another session is a supported choice, so the session count is said
+     * plainly rather than warned about.
+     */
+    private static String pickerLabel(Worktree w) {
+        String label = w.path;
+        String subtitle = w.subtitle();
+        if (!w.exists) {
+            subtitle = subtitle.isEmpty()
+                    ? "directory missing" : subtitle + "  ·  directory missing";
         }
-        return path;
+        return subtitle.isEmpty() ? label : label + "\n" + subtitle;
+    }
+
+    /**
+     * The platform's single-choice row, allowed to wrap. Its {@code CheckedTextView}
+     * is single-line in some themes, which would cut a worktree's path down to
+     * its head — the least useful half.
+     */
+    private ArrayAdapter<CharSequence> twoLineChoices(List<CharSequence> labels) {
+        return new ArrayAdapter<CharSequence>(
+                this, android.R.layout.simple_list_item_single_choice, labels) {
+            @Override public View getView(int position, View convertView, ViewGroup parent) {
+                View row = super.getView(position, convertView, parent);
+                View text = row.findViewById(android.R.id.text1);
+                if (text instanceof TextView) {
+                    ((TextView) text).setSingleLine(false);
+                    ((TextView) text).setMaxLines(3);
+                }
+                return row;
+            }
+        };
+    }
+
+    /**
+     * The server will happily attach a session to a worktree whose directory is
+     * gone — it deliberately does not recreate one, since a bare directory is
+     * not a worktree — and the session then fails on its first turn. So the
+     * warning is here.
+     */
+    private void confirmMissingDirectory(Worktree w, TextView picker, String[] worktreeId) {
+        new AlertDialog.Builder(this)
+                .setTitle("Directory missing")
+                .setMessage("The directory for this worktree is gone:\n\n" + w.path
+                        + "\n\nA session started here fails on its first turn. Clean it "
+                        + "up from Worktrees instead.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Use anyway", (d, x) -> selectWorktree(picker, worktreeId, w))
+                .show();
+    }
+
+    private void selectWorktree(TextView picker, String[] worktreeId, Worktree w) {
+        worktreeId[0] = w == null ? "" : w.id;
+        if (picker != null) picker.setText(w == null ? PROJECT_DIRECTORY : w.path);
+    }
+
+    /** Keep a just-created worktree in the cache, newest first, without a refetch. */
+    private void mergeWorktree(Worktree created) {
+        boolean known = false;
+        for (int i = 0; i < worktrees.size(); i++) {
+            if (worktrees.get(i).id.equals(created.id)) {
+                worktrees.set(i, created);
+                known = true;
+                break;
+            }
+        }
+        if (!known) worktrees.add(0, created);
+        // The list behind the dialog counts them in its Worktrees row.
+        if (lastSessions != null) renderList(lastSessions, null);
+    }
+
+    /** A field-shaped tap target that opens a chooser — the picker's look. */
+    private TextView selector(String label) {
+        TextView t = Widgets.text(this, label, Theme.INK, 15, false);
+        t.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
+        int p = Theme.dp(this, 12);
+        t.setPadding(p, 0, p, 0);
+        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setMinimumHeight(Theme.dp(this, 44));
+        t.setSingleLine(true);
+        t.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        t.setLayoutParams(lp(MATCH, WRAP));
+        t.setClickable(true);
+        return t;
     }
 
     /**
@@ -565,32 +733,15 @@ public class SessionListActivity extends Activity {
     }
 
     private TextView fieldLabel(String s) {
-        TextView t = Widgets.text(this, s, Theme.MUTED, 13, true);
-        Widgets.margins(t, 0, 0, 0, Theme.dp(this, 7));
-        return t;
+        return Widgets.fieldLabel(this, s);
     }
 
     private EditText field(String hint, int inputType, boolean mono) {
-        EditText e = new EditText(this);
-        e.setHint(hint);
-        e.setInputType(inputType);
-        e.setTextColor(Theme.INK);
-        e.setHintTextColor(Theme.FAINT);
-        e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        if (mono) e.setTypeface(Typeface.MONOSPACE);
-        e.setSingleLine(true);
-        e.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
-        int p = Theme.dp(this, 12);
-        e.setPadding(p, 0, p, 0);
-        e.setMinHeight(Theme.dp(this, 44));
-        e.setLayoutParams(lp(MATCH, WRAP));
-        return e;
+        return Widgets.field(this, hint, inputType, mono);
     }
 
     private View spacer(int dp) {
-        View v = new View(this);
-        v.setLayoutParams(lp(MATCH, Theme.dp(this, dp)));
-        return v;
+        return Widgets.spacer(this, dp);
     }
 
     private ScrollView wrapScroll(View content) {

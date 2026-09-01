@@ -46,4 +46,20 @@ public class JsonTest {
     public void aMissingIdIsEmptyRatherThanTheWordNull() {
         assertEquals("", Json.idOf(null));
     }
+
+    @Test
+    public void anIdGoesBackOnTheWireAsANumber() {
+        // worktree_id is typed int server-side, so a digits-only id has to
+        // leave as a JSON number rather than a quoted string.
+        assertEquals(1L, Json.wire("1"));
+        assertEquals(9007199254740993L, Json.wire("9007199254740993"));
+    }
+
+    @Test
+    public void anIdWithNoNumericFormGoesBackAsItself() {
+        // A uuid from a pre-migration server has nothing to parse, and passes
+        // through as the string it is.
+        assertEquals("7ce2f0e2-0e0f-4f6b-9a4e-2b1c0a5d9f11",
+                Json.wire("7ce2f0e2-0e0f-4f6b-9a4e-2b1c0a5d9f11"));
+    }
 }

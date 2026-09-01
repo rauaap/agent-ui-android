@@ -27,6 +27,10 @@
             android:name=".SessionListActivity"
             android:exported="false" />
         <activity
+            android:name=".WorktreeListActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".SessionActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />

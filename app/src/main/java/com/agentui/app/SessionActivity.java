@@ -174,8 +174,8 @@ public class SessionActivity extends Activity {
         nameView.setMaxLines(1);
         nameView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         headings.addView(nameView);
-        // The cwd, tagged when it is a worktree the server made for this
-        // session rather than the project's own directory.
+        // The cwd, tagged when the session runs in one of the project's
+        // worktrees rather than the project directory itself.
         LinearLayout where = Widgets.row(this);
         if (worktree) {
             TextView tag = Widgets.tag(this, "worktree", Theme.INFO);

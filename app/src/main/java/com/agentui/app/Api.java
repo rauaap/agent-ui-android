@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -27,6 +28,9 @@ import okhttp3.ResponseBody;
  *   GET    /projects
  *   POST   /projects
  *   DELETE /projects
+ *   GET    /worktrees
+ *   POST   /worktrees
+ *   DELETE /worktrees/{id}
  *   GET    /sessions
  *   POST   /sessions
  *   PATCH  /sessions/{id}
@@ -50,26 +54,13 @@ final class Api {
     }
 
     /**
-     * What {@code DELETE /sessions/{id}} reports about the session's worktree.
-     * The session is deleted either way — a worktree git refused to remove is
-     * information, not a failed request.
+     * What {@code DELETE /projects} reports about the project's worktrees. The
+     * project and its sessions are gone either way — a worktree git refused to
+     * remove is information, not a failed request.
      */
-    static final class Deletion {
-        /** True when the server removed a worktree it had created. */
-        final boolean worktreeRemoved;
-        /** git's refusal when the worktree was left in place, else null. */
-        final String worktreeError;
-
-        Deletion(boolean worktreeRemoved, String worktreeError) {
-            this.worktreeRemoved = worktreeRemoved;
-            this.worktreeError = worktreeError;
-        }
-    }
-
-    /** The same, for the whole project's worth of sessions. */
     static final class ProjectDeletion {
         final int worktreesRemoved;
-        /** One {@code "session: git's refusal"} line per worktree left behind. */
+        /** One {@code "path: git's refusal"} line per worktree left behind. */
         final List<String> worktreeErrors;
 
         ProjectDeletion(int worktreesRemoved, List<String> worktreeErrors) {
@@ -138,10 +129,86 @@ final class Api {
             JSONArray arr = o.optJSONArray("worktree_errors");
             for (int i = 0; arr != null && i < arr.length(); i++) {
                 JSONObject e = arr.getJSONObject(i);
-                errors.add(e.optString("session", "?") + ": " + e.optString("error", ""));
+                // Keyed by path: a worktree belongs to the project, not to any
+                // one of the sessions that happened to run in it.
+                errors.add(e.optString("path", "?") + ": " + e.optString("error", ""));
             }
             return new ProjectDeletion(o.optInt("worktrees_removed", 0), errors);
         });
+    }
+
+    /* ----------------------------------------------------------------- */
+    /* worktrees                                                         */
+    /* ----------------------------------------------------------------- */
+
+    /**
+     * The project's worktrees, newest first. The project is identified by path
+     * in a query parameter, like every other project-scoped endpoint — an
+     * unknown one is a 404.
+     *
+     * <p>A 404 is also what a server too old to have {@code /worktrees} gives,
+     * so callers that use it to decide whether to offer worktrees at all want
+     * {@link StatusCb}.
+     */
+    void listWorktrees(String projectPath, Cb<List<Worktree>> cb) {
+        // Built rather than concatenated: the filter is a filesystem path, and
+        // its slashes have to survive as query-string encoding.
+        HttpUrl base = HttpUrl.parse(prefs.httpBase() + "/worktrees");
+        if (base == null) {
+            post(() -> cb.onError("Bad server address"));
+            return;
+        }
+        HttpUrl url = base.newBuilder()
+                .addQueryParameter("project_path", projectPath)
+                .build();
+        Request req = new Request.Builder().url(url).get().build();
+        enqueue(req, cb, body -> {
+            List<Worktree> out = new ArrayList<>();
+            JSONArray arr = new JSONArray(body);
+            for (int i = 0; i < arr.length(); i++) out.add(Worktree.from(arr.getJSONObject(i)));
+            return out;
+        });
+    }
+
+    /**
+     * Runs {@code git worktree add -b <branch> <path>}, always cutting a new
+     * branch off the project's current HEAD — attaching to an existing branch
+     * has no endpoint.
+     *
+     * <p>{@code path} must be absolute; the server normalises it lexically, so
+     * a naive join is enough. Nothing is created on disk when this fails, and
+     * a 409 means the worktree is already there — worth {@link StatusCb} to
+     * offer the existing one instead.
+     */
+    void createWorktree(String projectPath, String path, String branch, Cb<Worktree> cb) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("project_path", projectPath);
+            payload.put("path", path);
+            payload.put("branch", branch);
+        } catch (Exception ignored) {}
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/worktrees")
+                .post(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> Worktree.from(new JSONObject(body)));
+    }
+
+    /**
+     * Removes the directory ({@code git worktree remove}, never
+     * {@code --force}) and the row.
+     *
+     * <p>Either 409 — sessions still attached, or a dirty tree — leaves both in
+     * place, so a caller must re-render from the state it had rather than
+     * dropping the worktree optimistically. {@link StatusCb} separates those
+     * from a real failure.
+     */
+    void deleteWorktree(String id, Cb<Void> cb) {
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/worktrees/" + id)
+                .delete()
+                .build();
+        enqueue(req, cb, body -> null);
     }
 
     void listSessions(Cb<List<Session>> cb) {
@@ -155,31 +222,31 @@ final class Api {
     }
 
     /**
-     * Create a session under {@code projectPath}, optionally in a git worktree
-     * of it — pass a null {@code worktreePath} for the plain case.
+     * Create a session under {@code projectPath}, attached to an existing
+     * worktree of it — pass an empty or null {@code worktreeId} to run in the
+     * project directory itself.
      *
-     * <p>The worktree is part of <em>this</em> request rather than one the
-     * client makes first, so ownership is atomic: a client that died between
-     * two calls would leave a worktree on disk that no session claims. If
-     * anything about it fails the response is a 400 and no session exists.
+     * <p>The worktree is created by its own endpoint first and merely
+     * referenced here, so several sessions can share one and it outlives them
+     * all. A stale id is a 404 and a worktree from another project a 400; in
+     * both cases no session is created.
      *
      * <p>The path travels as both {@code project_path} and its deprecated
      * spelling {@code working_dir}: a server that knows the new name ignores
      * the old one, and one that doesn't ignores the new one.
      */
     void createSession(String name, String projectPath, String agent,
-                       String worktreePath, String worktreeBranch, Cb<Session> cb) {
+                       String worktreeId, Cb<Session> cb) {
         JSONObject payload = new JSONObject();
         try {
             payload.put("name", name);
             payload.put("project_path", projectPath);
             payload.put("working_dir", projectPath);
             payload.put("agent", agent);
-            if (worktreePath != null) {
-                JSONObject worktree = new JSONObject();
-                worktree.put("path", worktreePath);
-                worktree.put("branch", worktreeBranch);
-                payload.put("worktree", worktree);
+            // Omitted rather than sent as null for the plain case: the field is
+            // optional, and an absent one reads the same to every server.
+            if (worktreeId != null && !worktreeId.isEmpty()) {
+                payload.put("worktree_id", Json.wire(worktreeId));
             }
         } catch (Exception ignored) {}
         Request req = new Request.Builder()
@@ -214,17 +281,17 @@ final class Api {
         enqueue(req, cb, body -> Session.from(new JSONObject(body)));
     }
 
-    void deleteSession(String id, Cb<Deletion> cb) {
+    /**
+     * Deletes the session row and its history. Nothing on disk is touched: a
+     * worktree the session ran in belongs to the project and stays, along with
+     * any other session using it.
+     */
+    void deleteSession(String id, Cb<Void> cb) {
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions/" + id)
                 .delete()
                 .build();
-        enqueue(req, cb, body -> {
-            JSONObject o = new JSONObject(body);
-            return new Deletion(
-                    o.optBoolean("worktree_removed", false),
-                    o.isNull("worktree_error") ? null : o.optString("worktree_error", null));
-        });
+        enqueue(req, cb, body -> null);
     }
 
     void stopSession(String id, Cb<Void> cb) {
