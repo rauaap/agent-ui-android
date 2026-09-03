@@ -25,6 +25,7 @@ import okhttp3.ResponseBody;
 /**
  * Thin REST client for the agent backend. All callbacks are delivered on the
  * main thread. Mirrors the web front-end's fetch() calls:
+ *   GET    /agents
  *   GET    /projects
  *   POST   /projects
  *   DELETE /projects
@@ -84,6 +85,25 @@ final class Api {
 
     OkHttpClient http() { return client; }
     Prefs prefs() { return prefs; }
+
+    /**
+     * The agents this server can run, in registration order, for the agent
+     * picker. Server-wide rather than project-scoped, and effectively static —
+     * it changes when the server is reconfigured, not while the app is open.
+     *
+     * <p>A 404 means a server predating the endpoint, whose agents are
+     * {@link Agent#FALLBACK}; callers that want to tell that from an
+     * unreachable server want {@link StatusCb}.
+     */
+    void listAgents(Cb<List<Agent>> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/agents").get().build();
+        enqueue(req, cb, body -> {
+            List<Agent> out = new ArrayList<>();
+            JSONArray arr = new JSONArray(body);
+            for (int i = 0; i < arr.length(); i++) out.add(Agent.from(arr.getJSONObject(i)));
+            return out;
+        });
+    }
 
     void listProjects(Cb<List<Project>> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/projects").get().build();

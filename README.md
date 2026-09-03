@@ -22,6 +22,12 @@ to install on a device).
   pre-filled with a generated `adjective-noun` suggestion — creating a session
   is two taps unless you want to name it yourself. Suggestions are not checked
   for uniqueness; sessions are identified by id and duplicate names are fine.
+- **Agent picker** — the new-session dialog offers the agents the *server* says
+  it can run (`GET /agents`), preselecting the one it flags as default, so an
+  agent added or removed backend-side shows up here without an app release. A
+  server too old to have the endpoint falls back to the two the app used to
+  hardcode. The session cards label each agent through the same list, so an id
+  the server no longer offers is still shown, as itself.
 - **Git worktrees** — a worktree is a project's, not a session's: it is created
   and removed on its own, any number of sessions can run in one, and it outlives
   all of them. The new-session dialog picks between the project directory (the
@@ -91,6 +97,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `Prefs.java`               | `SharedPreferences`-backed server config |
 | `Api.java`                 | OkHttp REST client for `/projects` + `/sessions` |
 | `Session.java` / `Project.java` / `Worktree.java` | session, project and worktree models |
+| `Agent.java`               | the server's agent list: labels, the default to preselect, the older-server fallback (pure parts unit tested) |
 | `Json.java`                | id decoding — server ids are JSON numbers, held as opaque strings (pure, unit tested) |
 | `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
 | `Composer.java`            | the `!` / `\!` split — prompt or shell command (pure, unit tested) |
@@ -142,7 +149,7 @@ agent backend.
 The server lives in [rauaap/agent-ui-server](https://github.com/rauaap/agent-ui-server); this
 is the protocol this client speaks to it.
 
-REST: `GET /projects`, `POST /projects`, `DELETE /projects`, `GET /worktrees`,
+REST: `GET /agents`, `GET /projects`, `POST /projects`, `DELETE /projects`, `GET /worktrees`,
 `POST /worktrees`, `DELETE /worktrees/{id}`, `GET /sessions`, `POST /sessions`,
 `PATCH /sessions/{id}`, `DELETE /sessions/{id}`, `POST /sessions/{id}/stop`.
 
@@ -156,6 +163,17 @@ every server and stay that way. Session routes type their `{id}` as an int, so
 a malformed one is a **422** (our bug) rather than the 404 that means the
 session is gone; ids are never reused, so a cached one is either valid or gone,
 never a different session.
+
+`GET /agents` returns `[{ id, name, default }]` in the server's registration
+order — the `id` to send back as `agent`, a label to show, and which one to
+preselect. It is the server's own registry, so the app keeps no list of agents:
+it renders what it is given and sends an id back. Fetched with the session list
+rather than once per process, since the answer belongs to whichever server the
+address in Settings currently points at. A **404 means an older server**, and so
+does any other failure as far as the picker is concerned: it falls back to
+`claude-code` / `opencode`, the two the app used to hardcode, which are exactly
+the agents a server without this endpoint has. An `agent` id no longer in the
+list — a session that outlived an adapter — renders as itself.
 
 `GET /projects` returns
 `[{ id, path, name, exists, is_git_repo, session_count, last_active_at }]`, where
@@ -207,7 +225,8 @@ intact, so the list is re-rendered rather than dropped optimistically. For a
 worktree whose directory is already gone the call succeeds and tidies the row
 away, which is offered as "clean up" rather than delete.
 
-`POST /sessions` body: `{ name, project_path, agent, worktree_id? }`. The
+`POST /sessions` body: `{ name, project_path, agent, worktree_id? }`, where
+`agent` is one of the ids from `GET /agents`. The
 project must already exist — an unknown `project_path` is a 404, not an adopted
 project. `worktree_id` is optional; omitted, the session runs in the project
 directory. A stale one is a 404 and one from another project a 400, and no

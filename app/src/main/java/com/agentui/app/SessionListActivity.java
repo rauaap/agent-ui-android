@@ -65,6 +65,13 @@ public class SessionListActivity extends Activity {
      * — the picker and the worktree screen then stay out of the way entirely.
      */
     private boolean worktreesSupported = true;
+    /**
+     * The agents this server can run, filled from {@code GET /agents} and empty
+     * until it lands — or against a server that has no such endpoint, where
+     * {@link Agent#FALLBACK} stands in. The picker in the new-session dialog is
+     * built from it, and the cards label a session's agent through it.
+     */
+    private final List<Agent> agents = new ArrayList<>();
     /** The sessions currently on screen, so a worktree load can re-render them. */
     private List<Session> lastSessions;
 
@@ -197,12 +204,39 @@ public class SessionListActivity extends Activity {
 
     private void loadSessions() {
         sessionCount.setText("…");
+        loadAgents();
         loadWorktrees();
         api.listSessions(new Api.Cb<List<Session>>() {
             @Override public void onResult(List<Session> sessions) {
                 renderList(scopeToProject(sessions), null);
             }
             @Override public void onError(String message) { renderList(null, message); }
+        });
+    }
+
+    /**
+     * The agents this server can run. Refetched with the list rather than once
+     * per process: it is a different server's answer after the address changes
+     * in Settings, and one request against a hand-written list is a fair trade.
+     *
+     * <p>A failure is silent, like the worktree load — the fallback list is
+     * still a working picker, and an unreachable server is already being
+     * reported by the session list itself.
+     */
+    private void loadAgents() {
+        api.listAgents(new Api.Cb<List<Agent>>() {
+            @Override public void onResult(List<Agent> list) {
+                agents.clear();
+                // An empty answer leaves this empty, which agentChoices() reads
+                // as no answer and falls back — a picker with nothing in it
+                // would be worse than a stale one.
+                agents.addAll(list);
+                // Cards label the agent through this, and are often on screen
+                // by the time it lands.
+                if (lastSessions != null) renderList(lastSessions, null);
+            }
+
+            @Override public void onError(String message) {}
         });
     }
 
@@ -498,13 +532,18 @@ public class SessionListActivity extends Activity {
 
         content.addView(spacer(14));
         content.addView(fieldLabel("Agent"));
-        final int[] agentIdx = {0};
-        TextView agent = selector(AGENT_LABELS[agentIdx[0]]);
+        // Snapshotted for the life of the dialog: a refresh landing while it is
+        // open must not renumber the choice under the selected index.
+        final List<Agent> choices = agentChoices();
+        final CharSequence[] agentLabels = new CharSequence[choices.size()];
+        for (int i = 0; i < choices.size(); i++) agentLabels[i] = choices.get(i).name;
+        final int[] agentIdx = {Agent.defaultIndex(choices)};
+        TextView agent = selector(choices.get(agentIdx[0]).name);
         agent.setOnClickListener(av -> new AlertDialog.Builder(this)
                 .setTitle("Agent")
-                .setSingleChoiceItems(AGENT_LABELS, agentIdx[0], (d, which) -> {
+                .setSingleChoiceItems(agentLabels, agentIdx[0], (d, which) -> {
                     agentIdx[0] = which;
-                    agent.setText(AGENT_LABELS[which]);
+                    agent.setText(agentLabels[which]);
                     d.dismiss();
                 })
                 .setNegativeButton("Cancel", null)
@@ -554,7 +593,7 @@ public class SessionListActivity extends Activity {
             String dir = projectDir != null ? projectDir : fallbackDir(name);
 
             v.setEnabled(false);
-            api.createSession(name, dir, AGENT_IDS[agentIdx[0]], worktreeId[0],
+            api.createSession(name, dir, choices.get(agentIdx[0]).id, worktreeId[0],
                     new Api.StatusCb<Session>() {
                         @Override public void onResult(Session session) {
                             dialog.dismiss();
@@ -758,15 +797,17 @@ public class SessionListActivity extends Activity {
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
     }
 
-    /** Agents the backend can run. Hardcoded — the server exposes no listing. */
-    private static final String[] AGENT_IDS    = {"claude-code", "opencode"};
-    private static final String[] AGENT_LABELS = {"Claude Code", "OpenCode"};
+    /**
+     * What the picker offers: what the server said it can run, or the built-in
+     * list while that is in flight and against a server that cannot answer.
+     * Never empty, so callers can index it.
+     */
+    private List<Agent> agentChoices() {
+        return agents.isEmpty() ? Agent.FALLBACK : agents;
+    }
 
-    static String formatAgent(String agent) {
-        for (int i = 0; i < AGENT_IDS.length; i++) {
-            if (AGENT_IDS[i].equals(agent)) return AGENT_LABELS[i];
-        }
-        return agent;
+    private String formatAgent(String agent) {
+        return Agent.label(agentChoices(), agent);
     }
 
     private static final DateTimeFormatter TIME_FMT =
