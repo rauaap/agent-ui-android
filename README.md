@@ -62,10 +62,33 @@ to install on a device).
   opt-in is remembered per session **per server address**: ids are only unique
   within one backend, so pointing the app elsewhere starts from a clean set
   rather than inheriting whatever wore the same id there.
+- **Archive** — file a session or a whole project away without deleting it.
+  The archive lives **server-side** (`archived_at`, a timestamp rather than a
+  flag), so it is the same on every device and a change made elsewhere arrives
+  over the session's WebSocket. Archive a session from its ⚙ settings, or a
+  project from the project's ⚙ settings — the latter is one call that
+  **cascades** to every session in it, and unarchiving restores exactly the ones
+  that cascade took, so a session you archived by hand beforehand stays
+  archived. Archived work is **read-only, not sealed**: the transcript still
+  opens and replays, and renaming, the auto-approve toggles and deleting all
+  still work — only new prompts and shell commands are refused, so the composer
+  is replaced by a notice with an Unarchive button. An archived project offers
+  no **+ New**. Archiving is refused while a session is busy, and a busy session
+  makes a whole project archive fail without writing anything. Everything
+  archived is under **Settings ▸ Archived**, newest filing first, where a row
+  opens what it points at and **Restore** puts it back. The main lists still
+  admit to what they hide ("2 sessions · 1 archived"). Two things archiving is
+  deliberately not: a shield against deletion — deleting a project still takes
+  its archived sessions with it, and says so — and a cleanup. Worktrees are a
+  project's, hold real uncommitted work, and are left exactly where they are;
+  an archived project's still list and can still be removed, but no new one can
+  be cut in it.
 - **Settings** — the server host / port (and optional TLS), the projects
   directory, and the worktree path template are stored in `SharedPreferences`,
   so they **persist across app restarts and device reboots**. Set them via the ⚙
-  button on the project list. The template takes `%P` (the project's parent
+  button on the project list. The ⚙ always opens the settings for what is on
+  screen: the server's from the project list, a project's from its session list,
+  a session's from its transcript. The template takes `%P` (the project's parent
   directory), `%N` (the project directory's own name), `%B` (the branch with
   slashes flattened to dashes) and `%b` (the branch verbatim); the default
   `%P/%N-%B` puts the worktree beside the project, and a live example shows what
@@ -91,11 +114,14 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WorktreeListActivity.java` | one project's worktrees: list / create / remove |
 | `WorktreeForm.java`        | the create-worktree dialog, shared by the picker and that list |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
-| `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, auto-approve toggles |
-| `SettingsActivity.java`    | server address + projects directory form (persisted) |
+| `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, auto-approve toggles, archive |
+| `ProjectSettingsActivity.java` | per-project settings: archive / unarchive the project and its sessions |
+| `SettingsActivity.java`    | server address + projects directory form (persisted) + the way in to Archived |
+| `ArchivedActivity.java`    | everything archived: projects, then the sessions under live projects, each with Restore |
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
-| `Api.java`                 | OkHttp REST client for `/projects` + `/sessions` |
+| `Archive.java`             | live/archived split of the two list responses, and the archive's ordering (pure, unit tested) |
+| `Api.java`                 | OkHttp REST client for `/projects` + `/worktrees` + `/sessions` |
 | `Session.java` / `Project.java` / `Worktree.java` | session, project and worktree models |
 | `Agent.java`               | the server's agent list: labels, the default to preselect, the older-server fallback (pure parts unit tested) |
 | `Json.java`                | id decoding — server ids are JSON numbers, held as opaque strings (pure, unit tested) |
@@ -149,9 +175,10 @@ agent backend.
 The server lives in [rauaap/agent-ui-server](https://github.com/rauaap/agent-ui-server); this
 is the protocol this client speaks to it.
 
-REST: `GET /agents`, `GET /projects`, `POST /projects`, `DELETE /projects`, `GET /worktrees`,
-`POST /worktrees`, `DELETE /worktrees/{id}`, `GET /sessions`, `POST /sessions`,
-`PATCH /sessions/{id}`, `DELETE /sessions/{id}`, `POST /sessions/{id}/stop`.
+REST: `GET /agents`, `GET /projects`, `POST /projects`, `PATCH /projects`,
+`DELETE /projects`, `GET /worktrees`, `POST /worktrees`, `DELETE /worktrees/{id}`,
+`GET /sessions`, `POST /sessions`, `PATCH /sessions/{id}`, `DELETE /sessions/{id}`,
+`POST /sessions/{id}/stop`.
 
 **Ids.** `projects.id`, `sessions.id` and `project_id` are JSON **numbers** —
 they were uuid strings until a server migration renumbered every row. The app
@@ -176,7 +203,8 @@ the agents a server without this endpoint has. An `agent` id no longer in the
 list — a session that outlived an adapter — renders as itself.
 
 `GET /projects` returns
-`[{ id, path, name, exists, is_git_repo, session_count, last_active_at }]`, where
+`[{ id, path, name, exists, is_git_repo, archived_at, session_count,
+archived_session_count, last_active_at }]`, where
 `last_active_at` is `null` for a project with no sessions yet, `exists` reports
 whether the directory is still on the server's disk, and `is_git_repo` is a hint
 for whether to offer the worktree toggle. There are no nested project routes:
@@ -190,12 +218,21 @@ matching sessions by `working_dir`.
 and the row, so a new project lists immediately. On a 404 the app opens the
 project anyway and lets the first session's `mkdir -p` create the directory.
 
-`DELETE /projects` body: `{ path }` — removes the project, its sessions and its
-worktrees, leaving the project's own directory alone. The path is in the body,
-not the URL, so no filesystem path has to be encoded into a path segment. The
-response adds `worktrees_removed` and `worktree_errors: [{ path, error }]` for
-the worktrees git refused to remove; it is always a 200 and the rows are gone
-regardless, so those directories are reported as left in place.
+`PATCH /projects` body: `{ path, archived }` — archives or unarchives the
+project, addressed by path in the body for the same reason `DELETE` is. The
+response is the project row plus `sessions_affected`, how many sessions the
+cascade archived or restored; it can legitimately be `0`, and on an unarchive it
+is **not** the same as `archived_session_count`, because sessions archived by
+hand beforehand stay archived. A **409 means a session is busy** and *nothing was
+written* — its `detail` names them, so the app shows it verbatim.
+
+`DELETE /projects` body: `{ path }` — removes the project, its sessions
+(archived ones included) and its worktrees, leaving the project's own directory
+alone. The path is in the body, not the URL, so no filesystem path has to be
+encoded into a path segment. The response adds `worktrees_removed` and
+`worktree_errors: [{ path, error }]` for the worktrees git refused to remove; it
+is always a 200 and the rows are gone regardless, so those directories are
+reported as left in place.
 
 **Worktrees.** A worktree is its own resource, not something a session owns.
 `GET /worktrees?project_path=…` returns
@@ -216,6 +253,8 @@ same way before comparing. A **409** means a worktree is already there — routi
 since a template maps a branch to the same path every time — and the body has no
 id, so the app looks the worktree up by path and offers it instead. Everything
 else is a 400 carrying git's own message, which is passed through unedited.
+Creating one **in an archived project is a 409**, so the app withholds the
+control there rather than let it fail.
 
 `DELETE /worktrees/{id}` removes the directory and the row, **never** with
 `--force`. Two 409s, neither of them a failure to show as an error: sessions
@@ -241,7 +280,13 @@ server-side) and `worktree_id` (null when they run in the project directory).
 worktree belongs to the project and stays, along with any other session in it.
 
 `PATCH /sessions/{id}` body (all optional): `{ name, auto_approve_write,
-auto_approve_command }` — rename and/or flip the per-session auto-approve toggles.
+auto_approve_command, archived }` — rename, flip the per-session auto-approve
+toggles, and/or archive it. Only the supplied fields are applied, so
+`{ archived: true }` alone disturbs nothing else. Unarchiving a session also
+unarchives its project — a live session under an archived project would have
+nowhere to show — so the app refetches afterwards. A **409 means the session is
+busy**, which `status` alone cannot predict: a shell command from bash mode runs
+outside the turn state machine, so an idle-looking session can still refuse.
 
 WebSocket: `ws(s)://<host>/ws/sessions/{id}`
 
@@ -263,9 +308,19 @@ server -> client : { type: "status",           status }   # idle | running | awa
                    { type: "question",         request_id, questions }
                    { type: "question_response", request_id, answers }
                    { type: "settings",         auto_approve_write, auto_approve_command }
+                   { type: "archived",         archived_at }   # null = brought back
                    { type: "done" }
                    { type: "error",            message }
 ```
+
+`archived` is sent on every change **and again on connect**, right after
+`status`, so a session archived from another device is picked up even if this
+client was offline when it happened. It is treated like `status` —
+authoritative, idempotent, safe to receive when nothing changed — and drives
+whether the composer is a composer or the archived notice. An `input` or `bash`
+frame sent for an archived session comes back as an ordinary
+`{ type: "error", message: "Session is archived" }`, which is exactly why the
+composer is taken away rather than left to collect text that can only bounce.
 
 `question` / `question_response` cover Claude Code's **AskUserQuestion** tool — a
 multiple-choice prompt the client renders as selectable options, sending the

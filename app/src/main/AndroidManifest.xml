@@ -42,6 +42,12 @@
             android:name=".SessionSettingsActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".ProjectSettingsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ArchivedActivity"
+            android:exported="false" />
         <service
             android:name=".WatchService"
             android:exported="false"

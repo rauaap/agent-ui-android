@@ -31,13 +31,21 @@ final class Session {
     final String agent;
     String status;
     final String lastActiveAt;
+    /**
+     * When the session was archived (ISO 8601, UTC), or empty while it is live.
+     * A timestamp rather than a flag so the archive can be ordered by when
+     * things were filed; re-archiving keeps the original, so a redundant call
+     * does not jump the queue. Mutable: the {@code archived} WebSocket event
+     * carries changes made on another device.
+     */
+    String archivedAt;
     // Per-session auto-approve toggles. Reads always run, so only the mutating
     // categories are switchable.
     boolean autoApproveWrite;
     boolean autoApproveCommand;
 
     Session(String id, String name, String projectId, String workingDir, String worktreeId,
-            String agent, String status, String lastActiveAt,
+            String agent, String status, String lastActiveAt, String archivedAt,
             boolean autoApproveWrite, boolean autoApproveCommand) {
         this.id = id;
         this.name = name;
@@ -47,9 +55,12 @@ final class Session {
         this.agent = agent;
         this.status = status;
         this.lastActiveAt = lastActiveAt;
+        this.archivedAt = archivedAt;
         this.autoApproveWrite = autoApproveWrite;
         this.autoApproveCommand = autoApproveCommand;
     }
+
+    boolean isArchived() { return !archivedAt.isEmpty(); }
 
     static Session from(JSONObject o) {
         return new Session(
@@ -64,6 +75,9 @@ final class Session {
                 o.optString("agent", "claude-code"),
                 o.optString("status", "idle"),
                 o.optString("last_active_at", ""),
+                // A live session reports archived_at: null, and optString would
+                // hand back the literal "null" for it.
+                o.isNull("archived_at") ? "" : o.optString("archived_at", ""),
                 o.optBoolean("auto_approve_write", false),
                 o.optBoolean("auto_approve_command", false));
     }

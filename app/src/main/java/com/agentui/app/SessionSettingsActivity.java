@@ -21,8 +21,9 @@ import static com.agentui.app.Widgets.lp;
 
 /**
  * Per-session settings, reached from the gear in the session header. Hosts the
- * notification opt-in (formerly the bell toggle) and renaming the session via
- * {@code PATCH /sessions/{id}}.
+ * notification opt-in (formerly the bell toggle), renaming the session via
+ * {@code PATCH /sessions/{id}}, and archiving it — the same route, one more
+ * optional field.
  *
  * <p>The (possibly updated) name is returned to {@link SessionActivity} via
  * {@link #EXTRA_NAME} on the result intent; the notification flag lives in
@@ -35,6 +36,14 @@ public class SessionSettingsActivity extends Activity {
     static final String EXTRA_STATUS = "status";
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
+    /** Whether the session is archived, both incoming and on the result. */
+    static final String EXTRA_ARCHIVED = "archived";
+    /**
+     * Set on the result only when the archiving happened <em>here</em>. The
+     * state alone cannot say that: the session's socket broadcasts the same
+     * change, so by the time the caller reads the result it may already know.
+     */
+    static final String EXTRA_JUST_ARCHIVED = "just_archived";
 
     private Api api;
     private String sessionId;
@@ -42,6 +51,7 @@ public class SessionSettingsActivity extends Activity {
     private String status;
     private boolean autoApproveWrite;
     private boolean autoApproveCommand;
+    private boolean archived;
 
     private EditText nameField;
     private Switch writeSwitch;
@@ -57,6 +67,7 @@ public class SessionSettingsActivity extends Activity {
         if (status == null) status = "idle";
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
         autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
+        archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         publishResult();
         setContentView(buildRoot());
     }
@@ -160,6 +171,41 @@ public class SessionSettingsActivity extends Activity {
         save.setOnClickListener(v -> rename(save));
         form.addView(save);
 
+        // ---- archive ----
+        form.addView(spacer(28));
+        form.addView(section("Archive"));
+        form.addView(spacer(12));
+
+        TextView archiveHint = Widgets.text(this, archived
+                        ? "This session is archived: it is off the project's session list "
+                          + "and cannot be given new work until you unarchive it. The "
+                          + "transcript still opens, and renaming and deleting still work."
+                        : "File this session away: it leaves the project's session list and "
+                          + "stops taking new prompts, but nothing is deleted and the "
+                          + "transcript stays readable under Settings ▸ Archived.",
+                Theme.MUTED, 12.5f, false);
+        form.addView(archiveHint);
+
+        form.addView(spacer(16));
+        TextView archiveBtn = Widgets.ghostButton(this,
+                archived ? "Unarchive session" : "Archive session");
+        archiveBtn.setMinimumHeight(Theme.dp(this, 48));
+        archiveBtn.setLayoutParams(lp(MATCH, WRAP));
+        archiveBtn.setOnClickListener(v -> toggleArchived(!archived, archiveBtn));
+        form.addView(archiveBtn);
+
+        // A busy session is refused server-side; say so instead of offering a
+        // button that can only fail. The reverse is always allowed.
+        if (!archived && isBusy()) {
+            archiveBtn.setEnabled(false);
+            archiveBtn.setAlpha(0.5f);
+            TextView busy = Widgets.text(this,
+                    "Busy right now — a session can only be archived while it is idle.",
+                    Theme.FAINT, 12, false);
+            Widgets.margins(busy, 0, Theme.dp(this, 10), 0, 0);
+            form.addView(busy);
+        }
+
         scroll.addView(form);
         root.addView(scroll);
 
@@ -175,7 +221,7 @@ public class SessionSettingsActivity extends Activity {
         api.prefs().setNotify(sessionId, enabled);
         if (enabled) {
             // If a task is already in flight, start watching it right away.
-            if ("running".equals(status) || "awaiting_approval".equals(status)) {
+            if (isBusy()) {
                 WatchService.watch(this, sessionId, sessionName, status);
             }
         } else {
@@ -235,6 +281,51 @@ public class SessionSettingsActivity extends Activity {
     }
 
     /* ---------------------------------------------------------------- */
+    /* archive                                                          */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Archiving is reversible and asks for no confirmation. It closes this
+     * screen and, through {@link #EXTRA_ARCHIVED}, the session behind it: the
+     * session has just left the list it was opened from, so the list is where
+     * to land. Unarchiving stays put — the session is back in good standing and
+     * throwing the user out of it would be perverse.
+     */
+    private void toggleArchived(boolean archive, View button) {
+        if (sessionId == null) return;
+        button.setEnabled(false);
+        api.setSessionArchived(sessionId, archive, new Api.StatusCb<Session>() {
+            @Override public void onResult(Session session) {
+                archived = session.isArchived();
+                publishResult(archived);
+                if (archived) {
+                    toast("Archived — it's under Settings ▸ Archived");
+                    finish();
+                } else {
+                    // Unarchiving also unarchives the project, so the screens
+                    // behind this one are stale either way; they reload on resume.
+                    toast("Unarchived");
+                    setContentView(buildRoot());
+                }
+            }
+
+            @Override public void onError(String message) {
+                button.setEnabled(true);
+                toast("Couldn't " + (archive ? "archive" : "unarchive") + ": " + message);
+            }
+
+            @Override public void onHttpError(int code, String message) {
+                button.setEnabled(true);
+                // 409 even though the button was enabled: a shell command from
+                // bash mode runs outside the turn state machine, so `status`
+                // cannot see it and the guard above cannot predict this.
+                toast(code == 409 ? message
+                        : "Couldn't " + (archive ? "archive" : "unarchive") + ": " + message);
+            }
+        });
+    }
+
+    /* ---------------------------------------------------------------- */
     /* rename                                                           */
     /* ---------------------------------------------------------------- */
 
@@ -264,13 +355,24 @@ public class SessionSettingsActivity extends Activity {
         });
     }
 
-    /** Hand the current name and toggles back so the caller can stay in sync. */
     private void publishResult() {
+        publishResult(false);
+    }
+
+    /** Hand the current name, toggles and archive state back to the caller. */
+    private void publishResult(boolean justArchived) {
         Intent data = new Intent();
         data.putExtra(EXTRA_NAME, sessionName);
         data.putExtra(EXTRA_AUTO_WRITE, autoApproveWrite);
         data.putExtra(EXTRA_AUTO_COMMAND, autoApproveCommand);
+        data.putExtra(EXTRA_ARCHIVED, archived);
+        data.putExtra(EXTRA_JUST_ARCHIVED, justArchived);
         setResult(RESULT_OK, data);
+    }
+
+    /** Busy as far as {@code status} can tell; bash mode is invisible to it. */
+    private boolean isBusy() {
+        return !"idle".equals(status);
     }
 
     /* ---------------------------------------------------------------- */

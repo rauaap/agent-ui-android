@@ -43,6 +43,7 @@ public class SessionActivity extends Activity {
     static final String EXTRA_STATUS = "status";
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
+    static final String EXTRA_ARCHIVED = "archived";
 
     private static final int REQ_SETTINGS = 2;
 
@@ -68,6 +69,13 @@ public class SessionActivity extends Activity {
     private TextView sendBtn;
     private LinearLayout composerBox; // the bordered frame around input + send
     private boolean bashMode;         // the composer is showing command styling
+    /**
+     * Archived sessions are read-only: the transcript replays as usual, but the
+     * server refuses prompts and shell commands, so the composer is swapped for
+     * a notice rather than left to collect text that can only bounce.
+     */
+    private boolean archived;
+    private LinearLayout composerHolder; // swaps between the composer and that notice
 
     // socket
     private WebSocket socket;
@@ -115,9 +123,11 @@ public class SessionActivity extends Activity {
         if (status == null) status = "idle";
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
         autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
+        archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         notifyOn = api.prefs().notifyEnabled(sessionId);
 
         setContentView(buildRoot(sessionName, dir, worktree));
+        applyArchived(archived);
         applyStatus(status);
         connect();
     }
@@ -312,10 +322,76 @@ public class SessionActivity extends Activity {
         sendBtn.setOnClickListener(v -> sendPrompt());
         composer.addView(sendBtn);
 
-        footer.addView(composer);
+        composerHolder = Widgets.column(this);
+        composerHolder.addView(composer);
+        footer.addView(composerHolder);
         root.addView(footer);
 
         return root;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* archived                                                         */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Show the composer, or — when the session is archived — the reason it is
+     * gone and the one action that brings it back. Authoritative and idempotent,
+     * like {@link #applyStatus}: it is driven by the {@code archived} event,
+     * which the server also sends on connect, so another device's archive
+     * arrives here without anything being polled.
+     */
+    private void applyArchived(boolean value) {
+        archived = value;
+        if (composerHolder == null) return;
+        composerHolder.removeAllViews();
+        if (!archived) {
+            composerHolder.addView(composerBox);
+            return;
+        }
+
+        // Whatever was half-typed can't be sent now; keeping the keyboard open
+        // over a dead composer would be the only thing worse than losing it.
+        hideKeyboard();
+
+        LinearLayout box = Widgets.row(this);
+        box.setBackground(Theme.rounded(this, Theme.PANEL, 18, Theme.LINE, 1));
+        int p = Theme.dp(this, 14);
+        box.setPadding(p, p, p, p);
+        TextView text = Widgets.text(this,
+                "This session is archived. Unarchive to continue working in it.",
+                Theme.MUTED, 13, false);
+        text.setLayoutParams(lp(0, WRAP, 1f));
+        box.addView(text);
+        TextView button = Widgets.ghostButton(this, "Unarchive");
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        Widgets.margins(button, Theme.dp(this, 10), 0, 0, 0);
+        button.setOnClickListener(this::unarchive);
+        box.addView(button);
+        composerHolder.addView(box);
+    }
+
+    private void unarchive(View button) {
+        button.setEnabled(false);
+        api.setSessionArchived(sessionId, false, new Api.Cb<Session>() {
+            @Override public void onResult(Session session) {
+                // The server unarchives the project along with it, so the lists
+                // behind this screen are stale too — they reload on resume.
+                applyArchived(session.isArchived());
+            }
+            @Override public void onError(String message) {
+                button.setEnabled(true);
+                android.widget.Toast.makeText(SessionActivity.this,
+                        "Couldn't unarchive: " + message,
+                        android.widget.Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private void hideKeyboard() {
+        android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
     }
 
     /* ---------------------------------------------------------------- */
@@ -385,6 +461,7 @@ public class SessionActivity extends Activity {
         i.putExtra(SessionSettingsActivity.EXTRA_STATUS, status);
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_WRITE, autoApproveWrite);
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_COMMAND, autoApproveCommand);
+        i.putExtra(SessionSettingsActivity.EXTRA_ARCHIVED, archived);
         startActivityForResult(i, REQ_SETTINGS);
     }
 
@@ -392,6 +469,18 @@ public class SessionActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQ_SETTINGS) return;
+        // Archived from settings: the session is no longer on the list this
+        // screen was opened from, so close it and follow it back there. Staying
+        // put and going read-only is the right answer for someone else's
+        // archive, arriving over the socket — not for the one you just did.
+        if (data != null
+                && data.getBooleanExtra(SessionSettingsActivity.EXTRA_JUST_ARCHIVED, false)) {
+            finish();
+            return;
+        }
+        if (data != null) {
+            applyArchived(data.getBooleanExtra(SessionSettingsActivity.EXTRA_ARCHIVED, archived));
+        }
         // The notification opt-in lives in Prefs; re-read it after settings close.
         notifyOn = api.prefs().notifyEnabled(sessionId);
         if (data != null) {
@@ -561,6 +650,12 @@ public class SessionActivity extends Activity {
                 // the cue to swap a buffered reconnect in for the old scrollback.
                 if (awaitingReplay) commitReplay();
                 applyStatus(msg.optString("status", "idle"));
+                break;
+            case "archived":
+                // Sent on every change and again on connect, so a session
+                // archived from another device is caught even if it happened
+                // while this client was offline. archived_at null means live.
+                applyArchived(!msg.isNull("archived_at"));
                 break;
             case "settings":
                 // Toggles may change from another client; keep our cache fresh so
@@ -1596,6 +1691,9 @@ public class SessionActivity extends Activity {
     }
 
     private void sendPrompt() {
+        // The composer is off screen while archived, but the IME's send action
+        // can still reach here from a detached-but-focused input.
+        if (archived) return;
         Composer parsed = Composer.parse(input.getText().toString());
         if (parsed == null || socket == null) return;
         try {

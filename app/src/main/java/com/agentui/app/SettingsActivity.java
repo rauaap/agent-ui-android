@@ -50,6 +50,7 @@ public class SettingsActivity extends Activity {
         updateTemplatePreview();
     }
 
+
     private View buildRoot() {
         LinearLayout root = Widgets.column(this);
         root.setBackgroundColor(Theme.BG);
@@ -168,6 +169,39 @@ public class SettingsActivity extends Activity {
         save.setLayoutParams(lp(MATCH, WRAP));
         save.setOnClickListener(v -> save());
         form.addView(save);
+
+        // ---- archived ----
+        // Below Save, because it navigates away rather than editing the form
+        // the button belongs to.
+        form.addView(spacer(28));
+        TextView archivedSection = Widgets.text(this, "Archived", Theme.ACCENT_STRONG, 12, true);
+        archivedSection.setAllCaps(true);
+        archivedSection.setLetterSpacing(0.06f);
+        form.addView(archivedSection);
+        form.addView(spacer(12));
+
+        LinearLayout archivedRow = Widgets.row(this);
+        archivedRow.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
+        int ap = Theme.dp(this, 14);
+        archivedRow.setPadding(ap, ap, ap, ap);
+        archivedRow.setLayoutParams(lp(MATCH, WRAP));
+        archivedRow.setClickable(true);
+        archivedRow.setOnClickListener(v ->
+                startActivity(new android.content.Intent(this, ArchivedActivity.class)));
+        LinearLayout archivedText = Widgets.column(this);
+        archivedText.setLayoutParams(lp(0, WRAP, 1f));
+        archivedText.addView(Widgets.text(this, "Archived projects and sessions",
+                Theme.INK, 15, false));
+        // No count here: the archive lives on the server, and fetching both
+        // listings to put a number on a menu row would not earn the round trip.
+        TextView archivedHint = Widgets.text(this,
+                "Work you've filed away. Still readable, and restorable.",
+                Theme.MUTED, 12.5f, false);
+        Widgets.margins(archivedHint, 0, Theme.dp(this, 3), 0, 0);
+        archivedText.addView(archivedHint);
+        archivedRow.addView(archivedText);
+        archivedRow.addView(Widgets.text(this, "›", Theme.FAINT, 20, false));
+        form.addView(archivedRow);
 
         scroll.addView(form);
         root.addView(scroll);

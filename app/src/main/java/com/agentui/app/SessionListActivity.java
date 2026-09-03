@@ -40,6 +40,7 @@ public class SessionListActivity extends Activity {
     static final String EXTRA_PROJECT_DIR = "project_dir";
     static final String EXTRA_PROJECT_NAME = "project_name";
     static final String EXTRA_PROJECT_IS_REPO = "project_is_repo";
+    static final String EXTRA_PROJECT_ARCHIVED = "project_archived";
 
     private Api api;
     private Prefs prefs;
@@ -55,6 +56,13 @@ public class SessionListActivity extends Activity {
     private String projectId;
     /** Whether the project directory is a git repo, so worktrees are on offer. */
     private boolean projectIsRepo;
+    /**
+     * Whether the project itself is archived — reached from the archive, then.
+     * Its sessions are all archived by the server's cascade, so this list shows
+     * them instead of hiding them, and offers no way to start another, in it or
+     * in one of its worktrees.
+     */
+    private boolean projectArchived;
     /**
      * The project's worktrees, refreshed with the session list. Kept here
      * because three things want them: the picker in the new-session dialog, the
@@ -88,6 +96,7 @@ public class SessionListActivity extends Activity {
         projectId = getIntent().getStringExtra(EXTRA_PROJECT_ID);
         if (projectId == null) projectId = "";
         projectIsRepo = getIntent().getBooleanExtra(EXTRA_PROJECT_IS_REPO, false);
+        projectArchived = getIntent().getBooleanExtra(EXTRA_PROJECT_ARCHIVED, false);
         if (projectName == null && projectDir != null) {
             projectName = ProjectListActivity.basename(projectDir);
         }
@@ -162,6 +171,11 @@ public class SessionListActivity extends Activity {
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
         brandHead.addView(title);
+        if (projectArchived) {
+            TextView tag = Widgets.tag(this, "archived", Theme.MUTED);
+            Widgets.margins(tag, Theme.dp(this, 8), 0, 0, 0);
+            brandHead.addView(tag);
+        }
         sessionCount = Widgets.text(this, "", Theme.MUTED, 13, false);
         Widgets.margins(sessionCount, 0, Theme.dp(this, 2), 0, 0);
         brand.addView(brandHead);
@@ -176,15 +190,27 @@ public class SessionListActivity extends Activity {
         brand.setLayoutParams(lp(0, WRAP, 1f));
         topbar.addView(brand);
 
+        // The gear always opens the settings for what is on screen: this
+        // project's, or — unscoped, where there is no project — the server's.
         TextView gear = Widgets.ghostButton(this, "⚙");
         gear.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
-        gear.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
+        gear.setOnClickListener(v -> {
+            if (projectDir == null) {
+                startActivity(new Intent(this, SettingsActivity.class));
+            } else {
+                openProjectSettings();
+            }
+        });
         Widgets.margins(gear, 0, 0, Theme.dp(this, 8), 0);
         topbar.addView(gear);
 
-        TextView newBtn = Widgets.primaryButton(this, "+ New");
-        newBtn.setOnClickListener(v -> showNewSessionDialog());
-        topbar.addView(newBtn);
+        // The server refuses a session in an archived project, so the control is
+        // hidden rather than left to 409.
+        if (!projectArchived) {
+            TextView newBtn = Widgets.primaryButton(this, "+ New");
+            newBtn.setOnClickListener(v -> showNewSessionDialog());
+            topbar.addView(newBtn);
+        }
 
         root.addView(topbar);
         root.addView(divider());
@@ -258,7 +284,9 @@ public class SessionListActivity extends Activity {
                     break;
                 }
             }
-            if (current == null || !oldSession.status.equals(current.status)) return true;
+            if (current == null
+                    || !oldSession.status.equals(current.status)
+                    || !oldSession.archivedAt.equals(current.archivedAt)) return true;
         }
         return false;
     }
@@ -322,22 +350,14 @@ public class SessionListActivity extends Activity {
     /**
      * Keep only this project's sessions. The REST API stays flat — every row
      * carries the link, so grouping happens here rather than in a nested route
-     * that would have to path-encode a filesystem path.
-     *
-     * <p>The link is {@code project_id}: a session running in a worktree has a
-     * {@code working_dir} somewhere else entirely, and matching on the path
-     * would drop it out of the list it belongs to. Path matching survives only
-     * as the fallback for a server old enough not to send an id, which is also
-     * a server old enough to have no worktrees.
+     * that would have to path-encode a filesystem path. See
+     * {@link Project#owns(String, String, Session)} for what counts as a link.
      */
     private List<Session> scopeToProject(List<Session> sessions) {
         if (projectDir == null) return sessions;
         List<Session> out = new ArrayList<>();
         for (Session s : sessions) {
-            boolean mine = !projectId.isEmpty() && !s.projectId.isEmpty()
-                    ? projectId.equals(s.projectId)
-                    : projectDir.equals(s.workingDir);
-            if (mine) out.add(s);
+            if (Project.owns(projectId, projectDir, s)) out.add(s);
         }
         return out;
     }
@@ -360,22 +380,37 @@ public class SessionListActivity extends Activity {
             return;
         }
 
+        // Unfiltered: an archived session still holds its worktree, so it has
+        // to count when working out whether one has been left with none.
         lastSessions = sessions;
-        int n = sessions.size();
-        sessionCount.setText(n + (n == 1 ? " session" : " sessions"));
+
+        // Archived sessions are hidden here and listed under Settings ▸ Archived;
+        // the count still admits to them, so none go missing silently. Under an
+        // archived project there is nothing but archived sessions, so hiding
+        // them would leave an empty screen — they are the content there.
+        List<Session> shown = projectArchived ? sessions : Archive.liveSessions(sessions);
+        int hidden = sessions.size() - shown.size();
+
+        int n = shown.size();
+        String count = n + (n == 1 ? " session" : " sessions");
+        if (projectArchived) count = n + (n == 1 ? " archived session" : " archived sessions");
+        else if (hidden > 0) count = count + "  ·  " + hidden + " archived";
+        sessionCount.setText(count);
 
         if (projectDir != null && projectIsRepo && worktreesSupported) {
             listContainer.addView(worktreeRow());
         }
 
         if (n == 0) {
-            listContainer.addView(emptyBox(projectDir != null
-                    ? "No sessions yet.\nTap + New to start one."
-                    : "No sessions yet"));
+            listContainer.addView(emptyBox(hidden > 0
+                    ? "Every session here is archived.\nRestore one from Settings ▸ Archived."
+                    : projectDir != null
+                            ? "No sessions yet.\nTap + New to start one."
+                            : "No sessions yet"));
             return;
         }
 
-        for (Session s : sessions) listContainer.addView(sessionCard(s));
+        for (Session s : shown) listContainer.addView(sessionCard(s));
     }
 
     /**
@@ -393,8 +428,8 @@ public class SessionListActivity extends Activity {
         rowLp.bottomMargin = Theme.dp(this, 12);
         row.setLayoutParams(rowLp);
         row.setClickable(true);
-        row.setOnClickListener(v ->
-                startActivity(WorktreeListActivity.intent(this, projectDir, projectName)));
+        row.setOnClickListener(v -> startActivity(
+                WorktreeListActivity.intent(this, projectDir, projectName, projectArchived)));
 
         TextView label = Widgets.text(this, "Worktrees", Theme.INK, 14, true);
         label.setLayoutParams(lp(0, WRAP, 1f));
@@ -443,6 +478,13 @@ public class SessionListActivity extends Activity {
         head.addView(name);
 
         LinearLayout actions = Widgets.row(this);
+        // Under an archived project every row is archived and the header says so
+        // once; a lone archived session is the surprise worth marking.
+        if (s.isArchived() && !projectArchived) {
+            TextView tag = Widgets.tag(this, "archived", Theme.MUTED);
+            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+            actions.addView(tag);
+        }
         TextView badge = Widgets.statusBadge(this, s.status);
         actions.addView(badge);
         TextView del = Widgets.text(this, "🗑", Theme.MUTED, 15, false);
@@ -494,7 +536,43 @@ public class SessionListActivity extends Activity {
         i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
         i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
         i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
+        i.putExtra(SessionActivity.EXTRA_ARCHIVED, s.isArchived());
         startActivity(i);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* project settings                                                 */
+    /* ---------------------------------------------------------------- */
+
+    private static final int REQ_PROJECT_SETTINGS = 3;
+
+    private void openProjectSettings() {
+        Intent i = new Intent(this, ProjectSettingsActivity.class);
+        i.putExtra(ProjectSettingsActivity.EXTRA_PROJECT_DIR, projectDir);
+        i.putExtra(ProjectSettingsActivity.EXTRA_PROJECT_NAME, projectName);
+        startActivityForResult(i, REQ_PROJECT_SETTINGS);
+    }
+
+    /**
+     * Archiving the whole project takes it off the project list and leaves this
+     * screen showing sessions that are no longer live, so step back rather than
+     * pretend otherwise. Unarchiving is the reverse and stays put — only the
+     * controls that an archived project withholds have to come back.
+     */
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PROJECT_SETTINGS || data == null) return;
+        if (!data.hasExtra(ProjectSettingsActivity.EXTRA_ARCHIVED)) return;
+        boolean archived = data.getBooleanExtra(ProjectSettingsActivity.EXTRA_ARCHIVED, false);
+        if (archived) {
+            finish();
+            return;
+        }
+        // The header's archived tag and the withheld "+ New" are decided in
+        // buildRoot, so rebuild it; onResume refills the list right after.
+        projectArchived = false;
+        setContentView(buildRoot());
     }
 
     private void confirmDelete(Session s) {
@@ -541,8 +619,8 @@ public class SessionListActivity extends Activity {
                 .setNegativeButton("OK", null);
         // The worktree screen is per project, so it needs one to open in.
         if (projectDir != null) {
-            b.setPositiveButton("Worktrees", (d, w) ->
-                    startActivity(WorktreeListActivity.intent(this, projectDir, projectName)));
+            b.setPositiveButton("Worktrees", (d, w) -> startActivity(
+                    WorktreeListActivity.intent(this, projectDir, projectName, projectArchived)));
         }
         b.show();
     }

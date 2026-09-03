@@ -181,32 +181,56 @@ public class ProjectListActivity extends Activity {
         });
     }
 
-    /** Refresh only the state that can change while this screen is visible. */
+    /**
+     * Refresh the two unfiltered listings already used by this screen. Besides
+     * live badges, this picks up archive changes made on another device: there
+     * is no global WebSocket feed for a project list.
+     */
     private void pollProjectStatuses() {
         if (statusPollInFlight || lastProjects == null) return;
         statusPollInFlight = true;
-        api.listSessions(new Api.Cb<List<Session>>() {
-            @Override public void onResult(List<Session> sessions) {
-                statusPollInFlight = false;
-                if (aggregateStatusesChanged(sessions)) {
-                    renderList(lastProjects, sessions, null);
-                } else {
-                    lastSessions = sessions;
-                }
+        api.listProjects(new Api.StatusCb<List<Project>>() {
+            @Override public void onResult(List<Project> projects) {
+                api.listSessions(new Api.Cb<List<Session>>() {
+                    @Override public void onResult(List<Session> sessions) {
+                        statusPollInFlight = false;
+                        if (projectRowsChanged(projects, sessions)) {
+                            renderList(projects, sessions, null);
+                        } else {
+                            lastProjects = projects;
+                            lastSessions = sessions;
+                        }
+                    }
+
+                    @Override public void onError(String message) {
+                        statusPollInFlight = false;
+                        // Keep the last known rows through a transient failure.
+                    }
+                });
             }
 
-            @Override public void onError(String message) {
+            @Override public void onError(String message) { statusPollInFlight = false; }
+            @Override public void onHttpError(int code, String message) {
                 statusPollInFlight = false;
-                // Keep the last known indicators through a transient failure.
             }
         });
     }
 
-    private boolean aggregateStatusesChanged(List<Session> sessions) {
-        for (Project project : lastProjects) {
-            String before = aggregateStatus(project, lastSessions);
-            String after = aggregateStatus(project, sessions);
-            if (before == null ? after != null : !before.equals(after)) return true;
+    private boolean projectRowsChanged(List<Project> projects, List<Session> sessions) {
+        if (lastProjects.size() != projects.size()) return true;
+        for (int i = 0; i < projects.size(); i++) {
+            Project before = lastProjects.get(i);
+            Project after = projects.get(i);
+            if (!before.id.equals(after.id)
+                    || before.sessionCount != after.sessionCount
+                    || before.archivedSessionCount != after.archivedSessionCount
+                    || !before.archivedAt.equals(after.archivedAt)
+                    || !before.lastActiveAt.equals(after.lastActiveAt)
+                    || !before.name.equals(after.name)
+                    || before.exists != after.exists) return true;
+            String oldStatus = aggregateStatus(before, lastSessions);
+            String newStatus = aggregateStatus(after, sessions);
+            if (oldStatus == null ? newStatus != null : !oldStatus.equals(newStatus)) return true;
         }
         return false;
     }
@@ -240,15 +264,24 @@ public class ProjectListActivity extends Activity {
 
         lastProjects = projects;
         lastSessions = sessions;
-        int n = projects.size();
-        projectCount.setText(n + (n == 1 ? " project" : " projects"));
+
+        // The listing carries the archive too — it is deliberately unfiltered —
+        // so the split happens here rather than in a second request.
+        List<Project> shown = Archive.liveProjects(projects);
+        int hidden = projects.size() - shown.size();
+
+        int n = shown.size();
+        String count = n + (n == 1 ? " project" : " projects");
+        projectCount.setText(hidden == 0 ? count : count + "  ·  " + hidden + " archived");
 
         if (n == 0) {
-            listContainer.addView(emptyBox("No projects yet.\nTap + New to start one."));
+            listContainer.addView(emptyBox(hidden > 0
+                    ? "Every project is archived.\nRestore one from Settings ▸ Archived."
+                    : "No projects yet.\nTap + New to start one."));
             return;
         }
 
-        for (Project p : projects) listContainer.addView(projectCard(p, sessions));
+        for (Project p : shown) listContainer.addView(projectCard(p, sessions));
     }
 
     private LinearLayout emptyBox(String message) {
@@ -313,13 +346,26 @@ public class ProjectListActivity extends Activity {
         Widgets.margins(path, 0, Theme.dp(this, 10), 0, 0);
         card.addView(path);
 
-        String sessions = p.sessionCount + (p.sessionCount == 1 ? " session" : " sessions");
+        // session_count is live sessions only, so it never promises sessions the
+        // list won't show; archived sessions get their own quiet link rather
+        // than being folded into it.
+        LinearLayout metaRow = Widgets.row(this);
+        String meta = p.sessionCount + (p.sessionCount == 1 ? " session" : " sessions");
         String when = SessionListActivity.formatTime(p.lastActiveAt);
-        TextView metaView = Widgets.text(this,
-                when.isEmpty() ? sessions : sessions + "  ·  " + when,
-                Theme.MUTED, 12.5f, false);
-        Widgets.margins(metaView, 0, Theme.dp(this, 8), 0, 0);
-        card.addView(metaView);
+        if (!when.isEmpty()) meta += "  ·  " + when;
+        TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
+        metaView.setLayoutParams(lp(0, WRAP, 1f));
+        metaRow.addView(metaView);
+        if (p.archivedSessionCount > 0) {
+            TextView archivedLink = Widgets.text(this,
+                    p.archivedSessionCount + " archived  ›", Theme.FAINT, 12.5f, false);
+            archivedLink.setClickable(true);
+            archivedLink.setOnClickListener(v -> openArchivedSessions(p));
+            Widgets.margins(archivedLink, Theme.dp(this, 10), 0, 0, 0);
+            metaRow.addView(archivedLink);
+        }
+        Widgets.margins(metaRow, 0, Theme.dp(this, 8), 0, 0);
+        card.addView(metaRow);
 
         return card;
     }
@@ -340,6 +386,13 @@ public class ProjectListActivity extends Activity {
             if ("running".equals(session.status)) running = true;
         }
         return running ? "running" : null;
+    }
+
+    private void openArchivedSessions(Project p) {
+        Intent i = new Intent(this, ArchivedActivity.class);
+        i.putExtra(ArchivedActivity.EXTRA_PROJECT_ID, p.id);
+        i.putExtra(ArchivedActivity.EXTRA_PROJECT_NAME, p.name);
+        startActivity(i);
     }
 
     private void openProject(Project p) {
@@ -540,7 +593,7 @@ public class ProjectListActivity extends Activity {
                 .setTitle("Directory missing")
                 .setMessage("The directory for \"" + p.name + "\" no longer exists "
                         + "on the server:\n\n" + p.path + "\n\n"
-                        + "Remove this project? " + sessionsPhrase(p.sessionCount)
+                        + "Remove this project? " + sessionsPhrase(p)
                         + " Nothing on disk is touched.")
                 .setNegativeButton("Keep", null)
                 .setPositiveButton("Remove project", (d, w) -> deleteProject(p))
@@ -550,18 +603,28 @@ public class ProjectListActivity extends Activity {
     private void confirmDelete(Project p) {
         new AlertDialog.Builder(this)
                 .setTitle("Delete project")
-                .setMessage("Delete \"" + p.name + "\"? " + sessionsPhrase(p.sessionCount)
+                .setMessage("Delete \"" + p.name + "\"? " + sessionsPhrase(p)
                         + " The directory and its files are left on disk.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Delete", (d, w) -> deleteProject(p))
                 .show();
     }
 
-    /** Spells out what deleting costs, since scrollback is not recoverable. */
-    private static String sessionsPhrase(int count) {
+    /**
+     * Spells out what deleting costs, since scrollback is not recoverable.
+     * Counts the archived sessions too: {@code session_count} is live ones only,
+     * and deleting the project takes the archive with it — archiving is not a
+     * shield against deletion and must not be made to look like one.
+     */
+    private static String sessionsPhrase(Project p) {
+        int count = p.sessionCount + p.archivedSessionCount;
         if (count == 0) return "It has no sessions.";
-        return "This removes " + count + (count == 1 ? " session" : " sessions")
-                + " and their history.";
+        String phrase = "This removes " + count + (count == 1 ? " session" : " sessions")
+                + " and their history";
+        if (p.archivedSessionCount > 0) {
+            phrase += ", including " + p.archivedSessionCount + " archived";
+        }
+        return phrase + ".";
     }
 
     private void deleteProject(Project p) {

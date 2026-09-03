@@ -28,6 +28,7 @@ import okhttp3.ResponseBody;
  *   GET    /agents
  *   GET    /projects
  *   POST   /projects
+ *   PATCH  /projects
  *   DELETE /projects
  *   GET    /worktrees
  *   POST   /worktrees
@@ -67,6 +68,18 @@ final class Api {
         ProjectDeletion(int worktreesRemoved, List<String> worktreeErrors) {
             this.worktreesRemoved = worktreesRemoved;
             this.worktreeErrors = worktreeErrors;
+        }
+    }
+
+    /** What {@code PATCH /projects} reports about the cascade it just ran. */
+    static final class ProjectArchive {
+        final Project project;
+        /** Sessions the cascade archived, or restored. Legitimately 0. */
+        final int sessionsAffected;
+
+        ProjectArchive(Project project, int sessionsAffected) {
+            this.project = project;
+            this.sessionsAffected = sessionsAffected;
         }
     }
 
@@ -127,6 +140,31 @@ final class Api {
                 .post(RequestBody.create(payload.toString(), JSON))
                 .build();
         enqueue(req, cb, body -> Project.from(new JSONObject(body)));
+    }
+
+    /**
+     * Archives or unarchives a project. Archiving cascades to every session in
+     * it; unarchiving restores exactly the ones that cascade took, so a session
+     * archived by hand beforehand stays archived — which is why the count comes
+     * back from the server rather than being guessed from the project row.
+     *
+     * <p>A 409 means at least one session is busy and <em>nothing was written</em>;
+     * its {@code detail} names them.
+     */
+    void setProjectArchived(String path, boolean archived, Cb<ProjectArchive> cb) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("path", path);
+            payload.put("archived", archived);
+        } catch (Exception ignored) {}
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/projects")
+                .patch(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> {
+            JSONObject o = new JSONObject(body);
+            return new ProjectArchive(Project.from(o), o.optInt("sessions_affected", 0));
+        });
     }
 
     /**
@@ -280,6 +318,27 @@ final class Api {
         JSONObject payload = new JSONObject();
         try {
             payload.put("name", name);
+        } catch (Exception ignored) {}
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/sessions/" + id)
+                .patch(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
+    }
+
+    /**
+     * Archives or unarchives one session. Unarchiving also unarchives its
+     * project if that was archived — a live session under an archived project
+     * would have nowhere to show — so refresh the project list afterwards.
+     *
+     * <p>A 409 means the session is busy. {@code status} does not settle that
+     * on its own: a shell command from bash mode runs outside the turn state
+     * machine, so an idle-looking session can still refuse.
+     */
+    void setSessionArchived(String id, boolean archived, Cb<Session> cb) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("archived", archived);
         } catch (Exception ignored) {}
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions/" + id)
