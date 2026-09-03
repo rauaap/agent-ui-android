@@ -45,6 +45,8 @@ public class SessionListActivity extends Activity {
     private Prefs prefs;
     private TextView sessionCount;
     private LinearLayout listContainer;
+    private ForegroundPoller statusPoller;
+    private boolean statusPollInFlight;
 
     /** Working directory this list is scoped to, or null when unscoped. */
     private String projectDir;
@@ -80,6 +82,7 @@ public class SessionListActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         prefs = api.prefs();
+        statusPoller = new ForegroundPoller(3000, this::pollSessionStatuses);
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
         projectName = getIntent().getStringExtra(EXTRA_PROJECT_NAME);
         projectId = getIntent().getStringExtra(EXTRA_PROJECT_ID);
@@ -107,7 +110,14 @@ public class SessionListActivity extends Activity {
             renderNeedsServer();
         } else {
             loadSessions();
+            statusPoller.start();
         }
+    }
+
+    @Override
+    protected void onPause() {
+        statusPoller.stop();
+        super.onPause();
     }
 
     /* ---------------------------------------------------------------- */
@@ -212,6 +222,45 @@ public class SessionListActivity extends Activity {
             }
             @Override public void onError(String message) { renderList(null, message); }
         });
+    }
+
+    /** Refresh live badges without repeating the agents and worktrees loads. */
+    private void pollSessionStatuses() {
+        if (statusPollInFlight) return;
+        statusPollInFlight = true;
+        api.listSessions(new Api.Cb<List<Session>>() {
+            @Override public void onResult(List<Session> sessions) {
+                statusPollInFlight = false;
+                List<Session> scoped = scopeToProject(sessions);
+                if (sessionStatusesChanged(scoped)) {
+                    renderList(scoped, null);
+                } else {
+                    // Keep non-visible fields fresh for actions that consult the
+                    // cached list, without rebuilding the UI every three seconds.
+                    lastSessions = scoped;
+                }
+            }
+
+            @Override public void onError(String message) {
+                statusPollInFlight = false;
+                // Keep the last known list through a transient polling failure.
+            }
+        });
+    }
+
+    private boolean sessionStatusesChanged(List<Session> sessions) {
+        if (lastSessions == null || lastSessions.size() != sessions.size()) return true;
+        for (Session oldSession : lastSessions) {
+            Session current = null;
+            for (Session candidate : sessions) {
+                if (oldSession.id.equals(candidate.id)) {
+                    current = candidate;
+                    break;
+                }
+            }
+            if (current == null || !oldSession.status.equals(current.status)) return true;
+        }
+        return false;
     }
 
     /**

@@ -32,6 +32,10 @@ public class ProjectListActivity extends Activity {
     private Prefs prefs;
     private TextView projectCount;
     private LinearLayout listContainer;
+    private ForegroundPoller statusPoller;
+    private List<Project> lastProjects;
+    private List<Session> lastSessions;
+    private boolean statusPollInFlight;
 
     /** Set once a server 404s on /projects, so we stop probing it every resume. */
     private boolean legacyServer;
@@ -41,6 +45,7 @@ public class ProjectListActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         prefs = api.prefs();
+        statusPoller = new ForegroundPoller(3000, this::pollProjectStatuses);
         setContentView(buildRoot());
         maybeRequestNotificationPermission();
     }
@@ -60,7 +65,14 @@ public class ProjectListActivity extends Activity {
             renderNeedsServer();
         } else {
             loadProjects();
+            statusPoller.start();
         }
+    }
+
+    @Override
+    protected void onPause() {
+        statusPoller.stop();
+        super.onPause();
     }
 
     /* ---------------------------------------------------------------- */
@@ -169,6 +181,36 @@ public class ProjectListActivity extends Activity {
         });
     }
 
+    /** Refresh only the state that can change while this screen is visible. */
+    private void pollProjectStatuses() {
+        if (statusPollInFlight || lastProjects == null) return;
+        statusPollInFlight = true;
+        api.listSessions(new Api.Cb<List<Session>>() {
+            @Override public void onResult(List<Session> sessions) {
+                statusPollInFlight = false;
+                if (aggregateStatusesChanged(sessions)) {
+                    renderList(lastProjects, sessions, null);
+                } else {
+                    lastSessions = sessions;
+                }
+            }
+
+            @Override public void onError(String message) {
+                statusPollInFlight = false;
+                // Keep the last known indicators through a transient failure.
+            }
+        });
+    }
+
+    private boolean aggregateStatusesChanged(List<Session> sessions) {
+        for (Project project : lastProjects) {
+            String before = aggregateStatus(project, lastSessions);
+            String after = aggregateStatus(project, sessions);
+            if (before == null ? after != null : !before.equals(after)) return true;
+        }
+        return false;
+    }
+
     /** Back-compat path: hand over to the unscoped session list and step aside. */
     private void openUnscopedSessions() {
         startActivity(new Intent(this, SessionListActivity.class));
@@ -176,6 +218,8 @@ public class ProjectListActivity extends Activity {
     }
 
     private void renderNeedsServer() {
+        lastProjects = null;
+        lastSessions = null;
         projectCount.setText("not configured");
         listContainer.removeAllViews();
         LinearLayout box = emptyBox("No server set.\nTap to configure the server address.");
@@ -187,11 +231,15 @@ public class ProjectListActivity extends Activity {
         listContainer.removeAllViews();
 
         if (error != null) {
+            lastProjects = null;
+            lastSessions = null;
             projectCount.setText("unreachable");
             listContainer.addView(emptyBox(error + "\n\nCheck the server address in Settings."));
             return;
         }
 
+        lastProjects = projects;
+        lastSessions = sessions;
         int n = projects.size();
         projectCount.setText(n + (n == 1 ? " project" : " projects"));
 
