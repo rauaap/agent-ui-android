@@ -139,8 +139,22 @@ public class ProjectListActivity extends Activity {
         }
         projectCount.setText("…");
         api.listProjects(new Api.StatusCb<List<Project>>() {
-            @Override public void onResult(List<Project> projects) { renderList(projects, null); }
-            @Override public void onError(String message) { renderList(null, message); }
+            @Override public void onResult(List<Project> projects) {
+                // Project rows do not carry session state, so fetch the flat
+                // session list and aggregate its statuses onto each card.
+                api.listSessions(new Api.Cb<List<Session>>() {
+                    @Override public void onResult(List<Session> sessions) {
+                        renderList(projects, sessions, null);
+                    }
+
+                    @Override public void onError(String message) {
+                        // Projects are still useful if this secondary request
+                        // fails; simply omit their live status indicators.
+                        renderList(projects, null, null);
+                    }
+                });
+            }
+            @Override public void onError(String message) { renderList(null, null, message); }
 
             @Override public void onHttpError(int code, String message) {
                 // An older server has no /projects. Fall through to the flat
@@ -149,7 +163,7 @@ public class ProjectListActivity extends Activity {
                     legacyServer = true;
                     openUnscopedSessions();
                 } else {
-                    renderList(null, message);
+                    renderList(null, null, message);
                 }
             }
         });
@@ -169,7 +183,7 @@ public class ProjectListActivity extends Activity {
         listContainer.addView(box);
     }
 
-    private void renderList(List<Project> projects, String error) {
+    private void renderList(List<Project> projects, List<Session> sessions, String error) {
         listContainer.removeAllViews();
 
         if (error != null) {
@@ -186,7 +200,7 @@ public class ProjectListActivity extends Activity {
             return;
         }
 
-        for (Project p : projects) listContainer.addView(projectCard(p));
+        for (Project p : projects) listContainer.addView(projectCard(p, sessions));
     }
 
     private LinearLayout emptyBox(String message) {
@@ -207,7 +221,7 @@ public class ProjectListActivity extends Activity {
         return box;
     }
 
-    private View projectCard(Project p) {
+    private View projectCard(Project p, List<Session> allSessions) {
         LinearLayout card = Widgets.column(this);
         card.setBackground(Theme.rounded(this, Theme.PANEL, 14, Theme.LINE, 1));
         int pad = Theme.dp(this, 16);
@@ -224,7 +238,18 @@ public class ProjectListActivity extends Activity {
         name.setLayoutParams(lp(0, WRAP, 1f));
         head.addView(name);
 
-        if (!p.exists) head.addView(Widgets.tag(this, "missing", Theme.DANGER));
+        String status = aggregateStatus(p, allSessions);
+        if (status != null) {
+            TextView badge = Widgets.statusBadge(this, status);
+            Widgets.margins(badge, Theme.dp(this, 8), 0, 0, 0);
+            head.addView(badge);
+        }
+
+        if (!p.exists) {
+            TextView missing = Widgets.tag(this, "missing", Theme.DANGER);
+            Widgets.margins(missing, Theme.dp(this, 8), 0, 0, 0);
+            head.addView(missing);
+        }
 
         TextView del = Widgets.text(this, "🗑", Theme.MUTED, 15, false);
         int dp32 = Theme.dp(this, 32);
@@ -249,6 +274,24 @@ public class ProjectListActivity extends Activity {
         card.addView(metaView);
 
         return card;
+    }
+
+    /**
+     * Most urgent live status among this project's sessions. Waiting for user
+     * input wins over running, and idle projects get no indicator.
+     */
+    private String aggregateStatus(Project project, List<Session> sessions) {
+        if (sessions == null) return null;
+        boolean running = false;
+        for (Session session : sessions) {
+            boolean belongsToProject = !project.id.isEmpty() && !session.projectId.isEmpty()
+                    ? project.id.equals(session.projectId)
+                    : project.path.equals(session.workingDir);
+            if (!belongsToProject) continue;
+            if ("awaiting_approval".equals(session.status)) return "awaiting_approval";
+            if ("running".equals(session.status)) running = true;
+        }
+        return running ? "running" : null;
     }
 
     private void openProject(Project p) {
