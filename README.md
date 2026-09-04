@@ -82,7 +82,10 @@ to install on a device).
   its archived sessions with it, and says so — and a cleanup. Worktrees are a
   project's, hold real uncommitted work, and are left exactly where they are;
   an archived project's still list and can still be removed, but no new one can
-  be cut in it.
+  be cut in it. An archived session may later **detach** from its worktree in
+  Session settings. This releases only the database reference and preserves the
+  same cwd as a `FORMER WORKTREE`; deleting that worktree later can make the
+  session impossible to restore until the exact directory is recreated.
 - **Settings** — the server host / port (and optional TLS), the projects
   directory, and the worktree path template are stored in `SharedPreferences`,
   so they **persist across app restarts and device reboots**. Set them via the ⚙
@@ -178,7 +181,7 @@ is the protocol this client speaks to it.
 REST: `GET /agents`, `GET /projects`, `POST /projects`, `PATCH /projects`,
 `DELETE /projects`, `GET /worktrees`, `POST /worktrees`, `DELETE /worktrees/{id}`,
 `GET /sessions`, `POST /sessions`, `PATCH /sessions/{id}`, `DELETE /sessions/{id}`,
-`POST /sessions/{id}/stop`.
+`POST /sessions/{id}/detach-worktree`, `POST /sessions/{id}/stop`.
 
 **Ids.** `projects.id`, `sessions.id` and `project_id` are JSON **numbers** —
 they were uuid strings until a server migration renumbered every row. The app
@@ -223,8 +226,10 @@ project, addressed by path in the body for the same reason `DELETE` is. The
 response is the project row plus `sessions_affected`, how many sessions the
 cascade archived or restored; it can legitimately be `0`, and on an unarchive it
 is **not** the same as `archived_session_count`, because sessions archived by
-hand beforehand stay archived. A **409 means a session is busy** and *nothing was
-written* — its `detail` names them, so the app shows it verbatim.
+hand beforehand stay archived. While archiving, a **409 means a session is busy**
+and *nothing was written* — its `detail` names them. While unarchiving, a 409
+means one or more effective working directories are unavailable; again nothing
+is restored, and those exact absolute paths must be recreated before retrying.
 
 `DELETE /projects` body: `{ path }` — removes the project, its sessions
 (archived ones included) and its worktrees, leaving the project's own directory
@@ -239,8 +244,9 @@ reported as left in place.
 `[{ id, project_id, path, branch, created_at, session_count, exists }]`, newest
 first, where `branch` is the branch the worktree was *created on* (null for one
 carried over by the server's migration, and never live state — an agent can
-switch branches in it), `session_count` may be `0` without anything being wrong,
-and `exists` is a `stat` of the directory at request time. A **404 means an
+switch branches in it), `session_count` counts attached sessions only and may be
+`0` without anything being wrong, and `exists` is a `stat` of the directory at
+request time. A **404 means an
 older server**, one that only made worktrees as part of a session; the app then
 hides the picker and the worktree screen entirely.
 
@@ -257,10 +263,12 @@ Creating one **in an archived project is a 409**, so the app withholds the
 control there rather than let it fail.
 
 `DELETE /worktrees/{id}` removes the directory and the row, **never** with
-`--force`. Two 409s, neither of them a failure to show as an error: sessions
-still attached (the server names them), or a dirty tree — and git counts
-untracked files as dirty, so this is the common outcome. Both leave the row
-intact, so the list is re-rendered rather than dropped optimistically. For a
+`--force`. Three 409s leave both intact: attached sessions, live detached
+sessions still using its path, or a dirty tree — and git counts untracked files
+as dirty, so the last is common. The server names blocking sessions. Before the
+request, the app also checks the complete session listing for archived detached
+sessions whose preserved `working_dir` equals the worktree path and warns that
+removal prevents restoring them until the exact directory is recreated. For a
 worktree whose directory is already gone the call succeeds and tidies the row
 away, which is offered as "clean up" rather than delete.
 
@@ -273,8 +281,10 @@ session is created either way. The client also sends the path as `working_dir`,
 the deprecated spelling of `project_path`, so the same request works against a
 server on either side of the rename.
 
-Sessions come back with `project_id`, `working_dir` (the cwd, computed
-server-side) and `worktree_id` (null when they run in the project directory).
+Sessions come back with `project_id`, `working_dir` (their effective cwd) and
+`worktree_id`. A null worktree id means either the project directory, or a
+former worktree after explicit detachment; comparing `working_dir` with the
+project path distinguishes them.
 
 `DELETE /sessions/{id}` returns `{ status }` and touches nothing on disk: the
 worktree belongs to the project and stays, along with any other session in it.
@@ -284,9 +294,15 @@ auto_approve_command, archived }` — rename, flip the per-session auto-approve
 toggles, and/or archive it. Only the supplied fields are applied, so
 `{ archived: true }` alone disturbs nothing else. Unarchiving a session also
 unarchives its project — a live session under an archived project would have
-nowhere to show — so the app refetches afterwards. A **409 means the session is
-busy**, which `status` alone cannot predict: a shell command from bash mode runs
-outside the turn state machine, so an idle-looking session can still refuse.
+nowhere to show — so the app refetches afterwards. While archiving, a **409 means
+the session is busy**, which `status` alone cannot predict: a shell command from
+bash mode runs outside the turn state machine. While unarchiving, a 409 means its
+effective cwd is unavailable and must be recreated at the same absolute path.
+
+`POST /sessions/{id}/detach-worktree` is available only to archived sessions.
+It clears `worktree_id` but preserves `working_dir`, touches nothing on disk,
+and is idempotent after a successful detach. It is offered later in Session
+settings, never automatically or as part of archive.
 
 WebSocket: `ws(s)://<host>/ws/sessions/{id}`
 
@@ -309,6 +325,7 @@ server -> client : { type: "status",           status }   # idle | running | awa
                    { type: "question_response", request_id, answers }
                    { type: "settings",         auto_approve_write, auto_approve_command }
                    { type: "archived",         archived_at }   # null = brought back
+                   { type: "worktree_detached", worktree_id: null, working_dir }
                    { type: "done" }
                    { type: "error",            message }
 ```
@@ -321,6 +338,9 @@ whether the composer is a composer or the archived notice. An `input` or `bash`
 frame sent for an archived session comes back as an ordinary
 `{ type: "error", message: "Session is archived" }`, which is exactly why the
 composer is taken away rather than left to collect text that can only bounce.
+`worktree_detached` updates the cwd and location display but is not replayed on
+connect, so the unfiltered REST session listing remains authoritative after an
+offline detach; duplicate events from retries are harmless.
 
 `question` / `question_response` cover Claude Code's **AskUserQuestion** tool — a
 multiple-choice prompt the client renders as selectable options, sending the

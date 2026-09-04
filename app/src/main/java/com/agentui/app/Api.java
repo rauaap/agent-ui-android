@@ -37,6 +37,7 @@ import okhttp3.ResponseBody;
  *   POST   /sessions
  *   PATCH  /sessions/{id}
  *   DELETE /sessions/{id}
+ *   POST   /sessions/{id}/detach-worktree
  *   POST   /sessions/{id}/stop
  */
 final class Api {
@@ -331,9 +332,10 @@ final class Api {
      * project if that was archived — a live session under an archived project
      * would have nowhere to show — so refresh the project list afterwards.
      *
-     * <p>A 409 means the session is busy. {@code status} does not settle that
-     * on its own: a shell command from bash mode runs outside the turn state
-     * machine, so an idle-looking session can still refuse.
+     * <p>While archiving, a 409 means the session is busy. {@code status} does
+     * not settle that on its own: bash mode is outside the turn state machine.
+     * While unarchiving, a 409 means its effective working directory is absent
+     * or is not a directory.
      */
     void setSessionArchived(String id, boolean archived, Cb<Session> cb) {
         JSONObject payload = new JSONObject();
@@ -343,6 +345,20 @@ final class Api {
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions/" + id)
                 .patch(RequestBody.create(payload.toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
+    }
+
+    /**
+     * Releases an archived session's worktree reference while preserving its
+     * effective working directory. The filesystem is not touched. A completed
+     * detach is idempotent; a session that always used the project directory,
+     * or one that is currently live, returns 409.
+     */
+    void detachSessionWorktree(String id, Cb<Session> cb) {
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + "/sessions/" + id + "/detach-worktree")
+                .post(RequestBody.create(new byte[0], null))
                 .build();
         enqueue(req, cb, body -> Session.from(new JSONObject(body)));
     }

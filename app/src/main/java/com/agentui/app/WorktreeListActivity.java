@@ -12,6 +12,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static com.agentui.app.Widgets.MATCH;
@@ -46,6 +47,8 @@ public class WorktreeListActivity extends Activity {
 
     private TextView worktreeCount;
     private LinearLayout listContainer;
+    /** Complete, unfiltered listing used to identify detached path dependencies. */
+    private List<Session> sessions = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -138,6 +141,10 @@ public class WorktreeListActivity extends Activity {
 
     private void load() {
         worktreeCount.setText("…");
+        loadWorktrees();
+    }
+
+    private void loadWorktrees() {
         api.listWorktrees(projectDir, new Api.Cb<List<Worktree>>() {
             @Override public void onResult(List<Worktree> worktrees) { render(worktrees, null); }
             @Override public void onError(String message) { render(null, message); }
@@ -191,7 +198,7 @@ public class WorktreeListActivity extends Activity {
         del.setLayoutParams(lp(dp32, dp32));
         Widgets.margins(del, Theme.dp(this, 8), 0, 0, 0);
         del.setClickable(true);
-        del.setOnClickListener(v -> confirmRemove(w));
+        del.setOnClickListener(v -> prepareRemove(w));
         head.addView(del);
         card.addView(head);
 
@@ -241,30 +248,62 @@ public class WorktreeListActivity extends Activity {
         WorktreeForm.show(this, api, projectDir, "", worktree -> load());
     }
 
+    /** Refresh immediately before confirmation so the advisory warning is not stale. */
+    private void prepareRemove(Worktree w) {
+        api.listSessions(new Api.Cb<List<Session>>() {
+            @Override public void onResult(List<Session> result) {
+                sessions = result;
+                confirmRemove(w);
+            }
+            @Override public void onError(String message) {
+                toast("Can't verify sessions using this directory: " + message);
+            }
+        });
+    }
+
     /**
      * "Clean up" for a worktree whose directory is already gone — git prunes
      * its own admin files and the row goes with it, so there is nothing to
      * delete and nothing to lose.
      */
     private void confirmRemove(Worktree w) {
+        int archivedDependents = archivedDetachedSessions(w);
         if (!w.exists) {
+            String dependency = archivedDependents == 0 ? "" : "\n\n" + archivedDependents
+                    + (archivedDependents == 1 ? " archived session uses" : " archived sessions use")
+                    + " this former working directory and already cannot be unarchived until "
+                    + "the same absolute path is recreated.";
             new AlertDialog.Builder(this)
                     .setTitle("Clean up worktree")
                     .setMessage("The directory is already gone:\n\n" + w.path
-                            + "\n\nRemove the entry?")
+                            + dependency + "\n\nRemove the entry?")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Clean up", (d, x) -> remove(w))
                     .show();
             return;
         }
+        String dependency = archivedDependents == 0 ? "" : "\n\nThis directory is the former "
+                + "working directory of " + archivedDependents
+                + (archivedDependents == 1 ? " archived session. " : " archived sessions. ")
+                + "Deleting it will prevent " + (archivedDependents == 1 ? "that session" : "those sessions")
+                + " from being unarchived until a directory is recreated at the same absolute path.";
         new AlertDialog.Builder(this)
                 .setTitle("Delete worktree")
                 .setMessage("Delete the worktree at\n\n" + w.path
                         + "\n\nIts directory is removed from disk. Committed work on "
-                        + branchPhrase(w) + " stays in the project's repository.")
+                        + branchPhrase(w) + " stays in the project's repository." + dependency)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Delete", (d, x) -> remove(w))
                 .show();
+    }
+
+    private int archivedDetachedSessions(Worktree w) {
+        int count = 0;
+        for (Session session : sessions) {
+            if (session.dependsOnFormerWorktree(w, projectDir)
+                    && session.isArchived()) count++;
+        }
+        return count;
     }
 
     private static String branchPhrase(Worktree w) {
@@ -290,7 +329,8 @@ public class WorktreeListActivity extends Activity {
                     // list is re-rendered from unchanged state rather than
                     // dropping the worktree optimistically.
                     load();
-                    if (message.contains("still using this worktree")) inUseDialog(message);
+                    if (message.contains("live detached session")) liveDetachedDialog(message);
+                    else if (message.contains("still using this worktree")) inUseDialog(message);
                     else dirtyDialog(w);
                     return;
                 }
@@ -306,9 +346,20 @@ public class WorktreeListActivity extends Activity {
     private void inUseDialog(String detail) {
         new AlertDialog.Builder(this)
                 .setTitle("Worktree still in use")
-                .setMessage(detail + "\n\nDelete those sessions first, then try again.")
-                .setNegativeButton("OK", null)
-                .setPositiveButton("Show sessions", (d, x) -> finish())
+                .setMessage(detail + "\n\nA live session must be deleted, or archived and then "
+                        + "detached from Session settings. An archived session can be detached "
+                        + "directly from its settings. Then retry the worktree deletion.")
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
+    private void liveDetachedDialog(String detail) {
+        new AlertDialog.Builder(this)
+                .setTitle("Directory still in use")
+                .setMessage(detail + "\n\nThese sessions still run from the former worktree "
+                        + "directory. Archive them before retrying; they will not be changed "
+                        + "automatically.")
+                .setPositiveButton("OK", null)
                 .show();
     }
 

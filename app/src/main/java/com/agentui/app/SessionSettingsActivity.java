@@ -36,6 +36,9 @@ public class SessionSettingsActivity extends Activity {
     static final String EXTRA_STATUS = "status";
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
+    static final String EXTRA_WORKING_DIR = "working_dir";
+    static final String EXTRA_PROJECT_DIR = "project_dir";
+    static final String EXTRA_WORKTREE_ID = "worktree_id";
     /** Whether the session is archived, both incoming and on the result. */
     static final String EXTRA_ARCHIVED = "archived";
     /**
@@ -52,6 +55,9 @@ public class SessionSettingsActivity extends Activity {
     private boolean autoApproveWrite;
     private boolean autoApproveCommand;
     private boolean archived;
+    private String workingDir;
+    private String projectDir;
+    private String worktreeId;
 
     private EditText nameField;
     private Switch writeSwitch;
@@ -68,6 +74,11 @@ public class SessionSettingsActivity extends Activity {
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
         autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
         archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
+        workingDir = getIntent().getStringExtra(EXTRA_WORKING_DIR);
+        if (workingDir == null) workingDir = "";
+        projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
+        worktreeId = getIntent().getStringExtra(EXTRA_WORKTREE_ID);
+        if (worktreeId == null) worktreeId = "";
         publishResult();
         setContentView(buildRoot());
     }
@@ -206,6 +217,33 @@ public class SessionSettingsActivity extends Activity {
             form.addView(busy);
         }
 
+        // Detachment is deliberately later cleanup, never part of archiving.
+        // It releases the database reference but preserves this exact cwd.
+        if (archived && !worktreeId.isEmpty()) {
+            form.addView(spacer(28));
+            form.addView(section("Worktree"));
+            form.addView(spacer(12));
+            form.addView(Widgets.text(this,
+                    "This archived session is attached to the worktree at:\n\n" + workingDir
+                            + "\n\nDetaching releases its reference without changing or deleting "
+                            + "anything on disk.", Theme.MUTED, 12.5f, false));
+            form.addView(spacer(16));
+            TextView detach = Widgets.ghostButton(this, "Detach from worktree");
+            detach.setMinimumHeight(Theme.dp(this, 48));
+            detach.setLayoutParams(lp(MATCH, WRAP));
+            detach.setOnClickListener(v -> confirmDetach(detach));
+            form.addView(detach);
+        } else if (isFormerWorktree()) {
+            form.addView(spacer(28));
+            form.addView(section("Former worktree"));
+            form.addView(spacer(12));
+            form.addView(Widgets.text(this,
+                    "This session keeps using its former worktree directory:\n\n" + workingDir
+                            + "\n\nIf that directory is deleted, the session cannot be "
+                            + "unarchived until it is recreated at this exact path.",
+                    Theme.MUTED, 12.5f, false));
+        }
+
         scroll.addView(form);
         root.addView(scroll);
 
@@ -297,6 +335,8 @@ public class SessionSettingsActivity extends Activity {
         api.setSessionArchived(sessionId, archive, new Api.StatusCb<Session>() {
             @Override public void onResult(Session session) {
                 archived = session.isArchived();
+                workingDir = session.workingDir;
+                worktreeId = session.worktreeId;
                 publishResult(archived);
                 if (archived) {
                     toast("Archived — it's under Settings ▸ Archived");
@@ -316,13 +356,60 @@ public class SessionSettingsActivity extends Activity {
 
             @Override public void onHttpError(int code, String message) {
                 button.setEnabled(true);
-                // 409 even though the button was enabled: a shell command from
-                // bash mode runs outside the turn state machine, so `status`
-                // cannot see it and the guard above cannot predict this.
-                toast(code == 409 ? message
+                // An archive 409 can be an invisible bash command. An unarchive
+                // 409 means the effective cwd is absent or not a directory.
+                if (code == 409 && !archive) showMissingWorkingDirectory(message);
+                else toast(code == 409 ? message
                         : "Couldn't " + (archive ? "archive" : "unarchive") + ": " + message);
             }
         });
+    }
+
+    private void confirmDetach(View button) {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Detach from worktree")
+                .setMessage("Release this archived session's reference to the worktree? "
+                        + "Nothing on disk is changed.\n\nThe session will keep " + workingDir
+                        + " as its former worktree directory. If the worktree is later deleted, "
+                        + "this session cannot be unarchived until that exact directory is recreated.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Detach", (d, w) -> detach(button))
+                .show();
+    }
+
+    private void detach(View button) {
+        button.setEnabled(false);
+        api.detachSessionWorktree(sessionId, new Api.StatusCb<Session>() {
+            @Override public void onResult(Session session) {
+                workingDir = session.workingDir;
+                worktreeId = session.worktreeId;
+                archived = session.isArchived();
+                publishResult();
+                toast("Detached — nothing was deleted");
+                setContentView(buildRoot());
+            }
+            @Override public void onError(String message) {
+                button.setEnabled(true);
+                toast("Couldn't detach: " + message);
+            }
+            @Override public void onHttpError(int code, String message) {
+                button.setEnabled(true);
+                toast(message);
+            }
+        });
+    }
+
+    private boolean isFormerWorktree() {
+        return worktreeId.isEmpty() && projectDir != null && !workingDir.equals(projectDir);
+    }
+
+    private void showMissingWorkingDirectory(String detail) {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Working directory unavailable")
+                .setMessage(detail + "\n\nRecreate a directory at the same absolute path, then "
+                        + "try unarchiving again:\n\n" + workingDir)
+                .setPositiveButton("OK", null)
+                .show();
     }
 
     /* ---------------------------------------------------------------- */
@@ -366,6 +453,8 @@ public class SessionSettingsActivity extends Activity {
         data.putExtra(EXTRA_AUTO_WRITE, autoApproveWrite);
         data.putExtra(EXTRA_AUTO_COMMAND, autoApproveCommand);
         data.putExtra(EXTRA_ARCHIVED, archived);
+        data.putExtra(EXTRA_WORKING_DIR, workingDir);
+        data.putExtra(EXTRA_WORKTREE_ID, worktreeId);
         data.putExtra(EXTRA_JUST_ARCHIVED, justArchived);
         setResult(RESULT_OK, data);
     }

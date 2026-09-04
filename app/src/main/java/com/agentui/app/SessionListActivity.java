@@ -286,7 +286,9 @@ public class SessionListActivity extends Activity {
             }
             if (current == null
                     || !oldSession.status.equals(current.status)
-                    || !oldSession.archivedAt.equals(current.archivedAt)) return true;
+                    || !oldSession.archivedAt.equals(current.archivedAt)
+                    || !oldSession.worktreeId.equals(current.worktreeId)
+                    || !oldSession.workingDir.equals(current.workingDir)) return true;
         }
         return false;
     }
@@ -508,6 +510,10 @@ public class SessionListActivity extends Activity {
                 TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
                 Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
                 where.addView(tag);
+            } else if (s.isFormerWorktree(projectDir)) {
+                TextView tag = Widgets.tag(this, "former worktree", Theme.MUTED);
+                Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+                where.addView(tag);
             }
             TextView path = Widgets.mono(this, s.workingDir, Theme.FAINT, 12);
             path.setSingleLine(true);
@@ -532,7 +538,8 @@ public class SessionListActivity extends Activity {
         i.putExtra(SessionActivity.EXTRA_ID, s.id);
         i.putExtra(SessionActivity.EXTRA_NAME, s.name);
         i.putExtra(SessionActivity.EXTRA_DIR, s.workingDir);
-        i.putExtra(SessionActivity.EXTRA_WORKTREE, !s.worktreeId.isEmpty());
+        i.putExtra(SessionActivity.EXTRA_PROJECT_DIR, projectDir);
+        i.putExtra(SessionActivity.EXTRA_WORKTREE_ID, s.worktreeId);
         i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
         i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
         i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);

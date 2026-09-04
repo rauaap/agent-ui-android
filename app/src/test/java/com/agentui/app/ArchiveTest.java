@@ -127,6 +127,26 @@ public class ArchiveTest {
     }
 
     @Test
+    public void detachedWorktreeStateUsesProjectIdAndNormalizedServerPaths() {
+        Worktree worktree = new Worktree("w1", "p1", "/projects/app-fix", "fix",
+                0, true, "");
+        Session detached = session("s1", "p1", "/projects/app-fix", "",
+                "2026-08-26T11:02:00Z");
+        Session projectDirectory = session("s2", "p1", "/projects/app", "",
+                "2026-08-26T11:02:00Z");
+        Session anotherProject = session("s3", "p2", "/projects/app-fix", "",
+                "2026-08-26T11:02:00Z");
+        Session attached = session("s4", "p1", "/projects/app-fix", "w1",
+                "2026-08-26T11:02:00Z");
+
+        assertEquals(true, detached.isFormerWorktree("/projects/app"));
+        assertEquals(true, detached.dependsOnFormerWorktree(worktree, "/projects/app"));
+        assertEquals(false, projectDirectory.dependsOnFormerWorktree(worktree, "/projects/app"));
+        assertEquals(false, anotherProject.dependsOnFormerWorktree(worktree, "/projects/app"));
+        assertEquals(false, attached.dependsOnFormerWorktree(worktree, "/projects/app"));
+    }
+
+    @Test
     public void findLocatesTheProjectByPath() {
         Project app = project("p1", "/app", "");
         List<Project> projects = Arrays.asList(app, project("p2", "/old", ""));

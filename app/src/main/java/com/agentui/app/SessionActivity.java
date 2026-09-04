@@ -39,7 +39,9 @@ public class SessionActivity extends Activity {
     static final String EXTRA_ID = "id";
     static final String EXTRA_NAME = "name";
     static final String EXTRA_DIR = "dir";
-    static final String EXTRA_WORKTREE = "worktree";
+    static final String EXTRA_PROJECT_DIR = "project_dir";
+    static final String EXTRA_WORKTREE_ID = "worktree_id";
+    static final String EXTRA_WORKTREE = "worktree"; // legacy caller compatibility
     static final String EXTRA_STATUS = "status";
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
@@ -51,6 +53,10 @@ public class SessionActivity extends Activity {
     private String sessionId;
     private String sessionName;
     private String status = "idle";
+    private String workingDir;
+    private String projectId = "";
+    private String projectDir;
+    private String worktreeId;
     private boolean notifyOn;
     // Cached per-session auto-approve toggles, kept fresh from `settings` events
     // and the settings screen, and handed to the settings screen on open.
@@ -63,6 +69,7 @@ public class SessionActivity extends Activity {
     private TextView scrollDownBtn;
     private LinearLayout statusHolder;
     private TextView nameView;
+    private LinearLayout locationHolder;
     private TextView stopBtn;
     private TextView activity;
     private EditText input;
@@ -117,8 +124,13 @@ public class SessionActivity extends Activity {
         api = new Api(this);
         sessionId = getIntent().getStringExtra(EXTRA_ID);
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
-        String dir = getIntent().getStringExtra(EXTRA_DIR);
-        boolean worktree = getIntent().getBooleanExtra(EXTRA_WORKTREE, false);
+        workingDir = getIntent().getStringExtra(EXTRA_DIR);
+        if (workingDir == null) workingDir = "";
+        projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
+        worktreeId = getIntent().getStringExtra(EXTRA_WORKTREE_ID);
+        if (worktreeId == null) {
+            worktreeId = getIntent().getBooleanExtra(EXTRA_WORKTREE, false) ? "legacy" : "";
+        }
         status = getIntent().getStringExtra(EXTRA_STATUS);
         if (status == null) status = "idle";
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
@@ -126,10 +138,58 @@ public class SessionActivity extends Activity {
         archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         notifyOn = api.prefs().notifyEnabled(sessionId);
 
-        setContentView(buildRoot(sessionName, dir, worktree));
+        setContentView(buildRoot(sessionName));
         applyArchived(archived);
         applyStatus(status);
         connect();
+        refreshSessionMetadata();
+    }
+
+    /**
+     * The detach event is not replayed on WebSocket connect. REST therefore
+     * refreshes effective cwd/worktree metadata, especially for notification
+     * intents that carry only an id and name.
+     */
+    private void refreshSessionMetadata() {
+        if (sessionId == null || sessionId.isEmpty()) return;
+        api.listSessions(new Api.Cb<java.util.List<Session>>() {
+            @Override public void onResult(java.util.List<Session> sessions) {
+                for (Session session : sessions) {
+                    if (!session.id.equals(sessionId)) continue;
+                    sessionName = session.name;
+                    nameView.setText(session.name);
+                    projectId = session.projectId;
+                    workingDir = session.workingDir;
+                    worktreeId = session.worktreeId;
+                    autoApproveWrite = session.autoApproveWrite;
+                    autoApproveCommand = session.autoApproveCommand;
+                    applyArchived(session.isArchived());
+                    applyStatus(session.status);
+                    if (projectDir == null && !projectId.isEmpty()) loadProjectPath();
+                    else renderLocation();
+                    return;
+                }
+            }
+            @Override public void onError(String message) {
+                // The socket and intent metadata still leave the transcript usable.
+            }
+        });
+    }
+
+    private void loadProjectPath() {
+        api.listProjects(new Api.StatusCb<java.util.List<Project>>() {
+            @Override public void onResult(java.util.List<Project> projects) {
+                for (Project project : projects) {
+                    if (project.id.equals(projectId)) {
+                        projectDir = project.path;
+                        break;
+                    }
+                }
+                renderLocation();
+            }
+            @Override public void onError(String message) {}
+            @Override public void onHttpError(int code, String message) {}
+        });
     }
 
     @Override
@@ -160,7 +220,7 @@ public class SessionActivity extends Activity {
     /* layout                                                           */
     /* ---------------------------------------------------------------- */
 
-    private View buildRoot(String name, String dir, boolean worktree) {
+    private View buildRoot(String name) {
         LinearLayout root = Widgets.column(this);
         root.setBackgroundColor(Theme.BG);
         root.setLayoutParams(lp(MATCH, MATCH));
@@ -184,21 +244,12 @@ public class SessionActivity extends Activity {
         nameView.setMaxLines(1);
         nameView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         headings.addView(nameView);
-        // The cwd, tagged when the session runs in one of the project's
-        // worktrees rather than the project directory itself.
-        LinearLayout where = Widgets.row(this);
-        if (worktree) {
-            TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
-            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
-            where.addView(tag);
-        }
-        TextView dirView = Widgets.mono(this, dir == null ? "" : dir, Theme.FAINT, 12);
-        dirView.setMaxLines(1);
-        dirView.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        dirView.setLayoutParams(lp(0, WRAP, 1f));
-        where.addView(dirView);
-        Widgets.margins(where, 0, Theme.dp(this, 2), 0, 0);
-        headings.addView(where);
+        // The effective cwd remains the former worktree path after an explicit
+        // detach; worktree_id null must not make that look like the project root.
+        locationHolder = Widgets.row(this);
+        renderLocation();
+        Widgets.margins(locationHolder, 0, Theme.dp(this, 2), 0, 0);
+        headings.addView(locationHolder);
         header.addView(headings);
 
         ImageView gearBtn = new ImageView(this);
@@ -330,6 +381,25 @@ public class SessionActivity extends Activity {
         return root;
     }
 
+    private void renderLocation() {
+        if (locationHolder == null) return;
+        locationHolder.removeAllViews();
+        if (!worktreeId.isEmpty()) {
+            TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
+            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+            locationHolder.addView(tag);
+        } else if (projectDir != null && !workingDir.equals(projectDir)) {
+            TextView tag = Widgets.tag(this, "former worktree", Theme.MUTED);
+            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+            locationHolder.addView(tag);
+        }
+        TextView dirView = Widgets.mono(this, workingDir, Theme.FAINT, 12);
+        dirView.setMaxLines(1);
+        dirView.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        dirView.setLayoutParams(lp(0, WRAP, 1f));
+        locationHolder.addView(dirView);
+    }
+
     /* ---------------------------------------------------------------- */
     /* archived                                                         */
     /* ---------------------------------------------------------------- */
@@ -373,7 +443,7 @@ public class SessionActivity extends Activity {
 
     private void unarchive(View button) {
         button.setEnabled(false);
-        api.setSessionArchived(sessionId, false, new Api.Cb<Session>() {
+        api.setSessionArchived(sessionId, false, new Api.StatusCb<Session>() {
             @Override public void onResult(Session session) {
                 // The server unarchives the project along with it, so the lists
                 // behind this screen are stale too — they reload on resume.
@@ -385,7 +455,21 @@ public class SessionActivity extends Activity {
                         "Couldn't unarchive: " + message,
                         android.widget.Toast.LENGTH_LONG).show();
             }
+            @Override public void onHttpError(int code, String message) {
+                button.setEnabled(true);
+                if (code == 409) showMissingWorkingDirectory(message);
+                else onError(message);
+            }
         });
+    }
+
+    private void showMissingWorkingDirectory(String detail) {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Working directory unavailable")
+                .setMessage(detail + "\n\nRecreate a directory at the same absolute path, then "
+                        + "try unarchiving again:\n\n" + workingDir)
+                .setPositiveButton("OK", null)
+                .show();
     }
 
     private void hideKeyboard() {
@@ -462,6 +546,9 @@ public class SessionActivity extends Activity {
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_WRITE, autoApproveWrite);
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_COMMAND, autoApproveCommand);
         i.putExtra(SessionSettingsActivity.EXTRA_ARCHIVED, archived);
+        i.putExtra(SessionSettingsActivity.EXTRA_WORKING_DIR, workingDir);
+        i.putExtra(SessionSettingsActivity.EXTRA_PROJECT_DIR, projectDir);
+        i.putExtra(SessionSettingsActivity.EXTRA_WORKTREE_ID, worktreeId);
         startActivityForResult(i, REQ_SETTINGS);
     }
 
@@ -493,6 +580,11 @@ public class SessionActivity extends Activity {
                     SessionSettingsActivity.EXTRA_AUTO_WRITE, autoApproveWrite);
             autoApproveCommand = data.getBooleanExtra(
                     SessionSettingsActivity.EXTRA_AUTO_COMMAND, autoApproveCommand);
+            String newWorkingDir = data.getStringExtra(SessionSettingsActivity.EXTRA_WORKING_DIR);
+            String newWorktreeId = data.getStringExtra(SessionSettingsActivity.EXTRA_WORKTREE_ID);
+            if (newWorkingDir != null) workingDir = newWorkingDir;
+            if (newWorktreeId != null) worktreeId = newWorktreeId;
+            renderLocation();
         }
         // Keep the watch in sync with the (possibly changed) name and opt-in.
         if (notifyOn && ("running".equals(status) || "awaiting_approval".equals(status))) {
@@ -656,6 +748,13 @@ public class SessionActivity extends Activity {
                 // archived from another device is caught even if it happened
                 // while this client was offline. archived_at null means live.
                 applyArchived(!msg.isNull("archived_at"));
+                break;
+            case "worktree_detached":
+                // Not replayed on connect, but authoritative and safe to receive
+                // more than once after an idempotent detach retry.
+                worktreeId = "";
+                workingDir = msg.optString("working_dir", workingDir);
+                renderLocation();
                 break;
             case "settings":
                 // Toggles may change from another client; keep our cache fresh so

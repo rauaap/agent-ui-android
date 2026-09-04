@@ -18,16 +18,16 @@ final class Session {
      */
     final String projectId;
     /**
-     * The directory the agent runs in. The project's own directory normally,
-     * the worktree's when {@link #worktreeId} is set. Computed server-side.
+     * The effective directory the agent runs in: normally the project's or an
+     * attached worktree's, and preserved as the former path after detachment.
      */
-    final String workingDir;
+    String workingDir;
     /**
-     * The worktree this session runs in, or empty for the project directory. A
-     * worktree is its own resource now: several sessions can share one, and it
-     * outlives them — deleting this session removes nothing from disk.
+     * The attached worktree, or empty for either the project directory or a
+     * former worktree after detachment. A worktree is its own resource: several
+     * sessions can share one, and deleting this session removes nothing on disk.
      */
-    final String worktreeId;
+    String worktreeId;
     final String agent;
     String status;
     final String lastActiveAt;
@@ -61,6 +61,19 @@ final class Session {
     }
 
     boolean isArchived() { return !archivedAt.isEmpty(); }
+
+    /** A released worktree path, rather than the project's own directory. */
+    boolean isFormerWorktree(String projectPath) {
+        return worktreeId.isEmpty() && projectPath != null
+                && !workingDir.equals(projectPath);
+    }
+
+    /** Whether this detached session preserves the given worktree's path. */
+    boolean dependsOnFormerWorktree(Worktree worktree, String projectPath) {
+        return projectId.equals(worktree.projectId)
+                && isFormerWorktree(projectPath)
+                && workingDir.equals(worktree.path);
+    }
 
     static Session from(JSONObject o) {
         return new Session(

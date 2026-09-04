@@ -29,8 +29,9 @@ final class Worktree {
      */
     final String branch;
     /**
-     * How many sessions run in this worktree. Zero is an ordinary state — an
-     * unused worktree still there to attach to — not a leak.
+     * How many sessions remain attached to this worktree. Explicitly detached
+     * sessions are excluded even though they preserve the same working path.
+     * Zero is an ordinary state — an unused worktree still there to attach to.
      */
     final int sessionCount;
     /**

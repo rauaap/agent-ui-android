@@ -232,11 +232,14 @@ public class ProjectSettingsActivity extends Activity {
 
             @Override public void onHttpError(int code, String message) {
                 button.setEnabled(true);
-                // 409: a session is busy and nothing was written — not even for
-                // the idle ones. The detail names them, so it is worth a dialog
-                // rather than a toast that scrolls the names past.
-                if (code == 409) showBusyDialog(message);
-                else toast("Couldn't " + (archived ? "archive" : "unarchive") + ": " + message);
+                // Both 409s are all-or-nothing: archive names busy sessions;
+                // unarchive names unavailable working directories.
+                if (code == 409) {
+                    if (archived) showBusyDialog(message);
+                    else showMissingDirectoriesDialog(message);
+                } else {
+                    toast("Couldn't " + (archived ? "archive" : "unarchive") + ": " + message);
+                }
             }
         });
     }
@@ -246,6 +249,15 @@ public class ProjectSettingsActivity extends Activity {
                 .setTitle("Sessions still busy")
                 .setMessage(detail + "\n\nNothing was archived. Let them finish, or stop "
                         + "them, and try again.")
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
+    private void showMissingDirectoriesDialog(String detail) {
+        new AlertDialog.Builder(this)
+                .setTitle("Working directories unavailable")
+                .setMessage(detail + "\n\nNothing was restored. Recreate directories at the same "
+                        + "absolute paths, then try unarchiving the project again.")
                 .setPositiveButton("OK", null)
                 .show();
     }

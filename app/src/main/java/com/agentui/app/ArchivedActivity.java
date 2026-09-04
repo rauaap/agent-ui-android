@@ -231,12 +231,14 @@ public class ArchivedActivity extends Activity {
 
     private View sessionCard(Session s, List<Project> projects) {
         LinearLayout card = card();
+        Project project = projectFor(s, projects);
         card.setOnClickListener(v -> {
             Intent i = new Intent(this, SessionActivity.class);
             i.putExtra(SessionActivity.EXTRA_ID, s.id);
             i.putExtra(SessionActivity.EXTRA_NAME, s.name);
             i.putExtra(SessionActivity.EXTRA_DIR, s.workingDir);
-            i.putExtra(SessionActivity.EXTRA_WORKTREE, !s.worktreeId.isEmpty());
+            i.putExtra(SessionActivity.EXTRA_PROJECT_DIR, project == null ? null : project.path);
+            i.putExtra(SessionActivity.EXTRA_WORKTREE_ID, s.worktreeId);
             i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
             i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
             i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
@@ -259,6 +261,22 @@ public class ArchivedActivity extends Activity {
         Widgets.margins(origin, 0, Theme.dp(this, 10), 0, 0);
         card.addView(origin);
 
+        if (!s.worktreeId.isEmpty() || (project != null && s.isFormerWorktree(project.path))) {
+            LinearLayout where = Widgets.row(this);
+            TextView tag = Widgets.tag(this,
+                    s.worktreeId.isEmpty() ? "former worktree" : "worktree",
+                    s.worktreeId.isEmpty() ? Theme.MUTED : Theme.INFO);
+            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+            where.addView(tag);
+            TextView path = Widgets.mono(this, s.workingDir, Theme.FAINT, 12);
+            path.setSingleLine(true);
+            path.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+            path.setLayoutParams(lp(0, WRAP, 1f));
+            where.addView(path);
+            Widgets.margins(where, 0, Theme.dp(this, 8), 0, 0);
+            card.addView(where);
+        }
+
         TextView metaView = Widgets.text(this,
                 Agent.label(Agent.FALLBACK, s.agent)
                         + "  ·  archived " + SessionListActivity.formatTime(s.archivedAt),
@@ -269,12 +287,17 @@ public class ArchivedActivity extends Activity {
         return card;
     }
 
+    private Project projectFor(Session s, List<Project> projects) {
+        for (Project p : projects) {
+            if (p.owns(s)) return p;
+        }
+        return null;
+    }
+
     /** The project's name, falling back to the session's directory. */
     private String projectOf(Session s, List<Project> projects) {
-        for (Project p : projects) {
-            if (p.owns(s)) return p.name;
-        }
-        return s.workingDir;
+        Project project = projectFor(s, projects);
+        return project == null ? s.workingDir : project.name;
     }
 
     /* ---------------------------------------------------------------- */
@@ -283,7 +306,7 @@ public class ArchivedActivity extends Activity {
 
     private void restoreProject(Project p, View button) {
         button.setEnabled(false);
-        api.setProjectArchived(p.path, false, new Api.Cb<Api.ProjectArchive>() {
+        api.setProjectArchived(p.path, false, new Api.StatusCb<Api.ProjectArchive>() {
             @Override public void onResult(Api.ProjectArchive result) {
                 // Only what this project's own archive swept up comes back, so
                 // the server's count is the one to report — not the row's.
@@ -295,12 +318,17 @@ public class ArchivedActivity extends Activity {
                 button.setEnabled(true);
                 toast("Couldn't restore: " + message);
             }
+            @Override public void onHttpError(int code, String message) {
+                button.setEnabled(true);
+                if (code == 409) showRestoreBlocked(message, true, null);
+                else onError(message);
+            }
         });
     }
 
     private void restoreSession(Session s, View button) {
         button.setEnabled(false);
-        api.setSessionArchived(s.id, false, new Api.Cb<Session>() {
+        api.setSessionArchived(s.id, false, new Api.StatusCb<Session>() {
             @Override public void onResult(Session session) {
                 // This also unarchives the session's project if that was
                 // archived — the reload picks the change up either way.
@@ -311,7 +339,24 @@ public class ArchivedActivity extends Activity {
                 button.setEnabled(true);
                 toast("Couldn't restore: " + message);
             }
+            @Override public void onHttpError(int code, String message) {
+                button.setEnabled(true);
+                if (code == 409) showRestoreBlocked(message, false, s.workingDir);
+                else onError(message);
+            }
         });
+    }
+
+    private void showRestoreBlocked(String detail, boolean project, String path) {
+        String message = detail + "\n\n" + (project
+                ? "Nothing was restored. Recreate the missing directories at the same absolute "
+                        + "paths, then try again."
+                : "Recreate a directory at the same absolute path, then try again:\n\n" + path);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(project ? "Working directories unavailable" : "Working directory unavailable")
+                .setMessage(message)
+                .setPositiveButton("OK", null)
+                .show();
     }
 
     private void confirmDeleteProject(Project p) {
