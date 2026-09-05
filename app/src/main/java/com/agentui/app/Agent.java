@@ -60,9 +60,19 @@ final class Agent {
     }
 
     /**
-     * Index of the entry to preselect — the flagged default, or the first one,
-     * since the server lists them in registration order and any pick is valid.
+     * Index of the entry to preselect — the user's preference when it is still
+     * available, otherwise the default advertised by the server.
      */
+    static int defaultIndex(List<Agent> known, String preferredId) {
+        if (preferredId != null && !preferredId.isEmpty()) {
+            for (int i = 0; i < known.size(); i++) {
+                if (known.get(i).id.equals(preferredId)) return i;
+            }
+        }
+        return defaultIndex(known);
+    }
+
+    /** Server default, or the first registered agent when none is flagged. */
     static int defaultIndex(List<Agent> known) {
         for (int i = 0; i < known.size(); i++) {
             if (known.get(i).isDefault) return i;

@@ -82,6 +82,8 @@ public class SessionListActivity extends Activity {
      * built from it, and the cards label a session's agent through it.
      */
     private final List<Agent> agents = new ArrayList<>();
+    private boolean agentsLoading;
+    private boolean openNewAfterAgentsLoad;
     /** The sessions currently on screen, so a worktree load can re-render them. */
     private List<Session> lastSessions;
 
@@ -240,6 +242,9 @@ public class SessionListActivity extends Activity {
 
     private void loadSessions() {
         sessionCount.setText("…");
+        // Do not carry one server's registry into another after Settings changes
+        // the address. The fallback supplies labels until the fresh list lands.
+        agents.clear();
         loadAgents();
         loadWorktrees();
         api.listSessions(new Api.Cb<List<Session>>() {
@@ -303,6 +308,7 @@ public class SessionListActivity extends Activity {
      * reported by the session list itself.
      */
     private void loadAgents() {
+        agentsLoading = true;
         api.listAgents(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
                 agents.clear();
@@ -310,13 +316,24 @@ public class SessionListActivity extends Activity {
                 // as no answer and falls back — a picker with nothing in it
                 // would be worse than a stale one.
                 agents.addAll(list);
+                agentsLoading = false;
                 // Cards label the agent through this, and are often on screen
                 // by the time it lands.
                 if (lastSessions != null) renderList(lastSessions, null);
+                openPendingNewSession();
             }
 
-            @Override public void onError(String message) {}
+            @Override public void onError(String message) {
+                agentsLoading = false;
+                openPendingNewSession();
+            }
         });
+    }
+
+    private void openPendingNewSession() {
+        if (!openNewAfterAgentsLoad) return;
+        openNewAfterAgentsLoad = false;
+        showNewSessionDialog();
     }
 
     /**
@@ -641,6 +658,13 @@ public class SessionListActivity extends Activity {
             startActivity(new Intent(this, SettingsActivity.class));
             return;
         }
+        // A saved preference may name an adapter absent from the legacy fallback
+        // list. Wait for the in-flight registry request so "New" never briefly
+        // preselects the wrong agent just because it was tapped quickly.
+        if (agentsLoading) {
+            openNewAfterAgentsLoad = true;
+            return;
+        }
 
         LinearLayout content = Widgets.column(this);
         int pad = Theme.dp(this, 20);
@@ -671,7 +695,7 @@ public class SessionListActivity extends Activity {
         final List<Agent> choices = agentChoices();
         final CharSequence[] agentLabels = new CharSequence[choices.size()];
         for (int i = 0; i < choices.size(); i++) agentLabels[i] = choices.get(i).name;
-        final int[] agentIdx = {Agent.defaultIndex(choices)};
+        final int[] agentIdx = {Agent.defaultIndex(choices, prefs.defaultAgent())};
         TextView agent = selector(choices.get(agentIdx[0]).name);
         agent.setOnClickListener(av -> new AlertDialog.Builder(this)
                 .setTitle("Agent")

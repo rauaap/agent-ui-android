@@ -23,11 +23,13 @@ to install on a device).
   is two taps unless you want to name it yourself. Suggestions are not checked
   for uniqueness; sessions are identified by id and duplicate names are fine.
 - **Agent picker** — the new-session dialog offers the agents the *server* says
-  it can run (`GET /agents`), preselecting the one it flags as default, so an
-  agent added or removed backend-side shows up here without an app release. A
-  server too old to have the endpoint falls back to the two the app used to
-  hardcode. The session cards label each agent through the same list, so an id
-  the server no longer offers is still shown, as itself.
+  it can run (`GET /agents`). Settings can choose the agent preselected for every
+  new session, or defer to the one the server flags as default. If that preferred
+  adapter is unavailable, the picker safely falls back to the server default. An
+  agent added or removed backend-side shows up without an app release. A server
+  too old to have the endpoint falls back to the two the app used to hardcode.
+  Session cards label each agent through the same list, so an id the server no
+  longer offers is still shown, as itself.
 - **Git worktrees** — a worktree is a project's, not a session's: it is created
   and removed on its own, any number of sessions can run in one, and it outlives
   all of them. The new-session dialog picks between the project directory (the

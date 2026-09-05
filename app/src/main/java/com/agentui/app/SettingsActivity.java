@@ -1,6 +1,7 @@
 package com.agentui.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.InputType;
@@ -14,6 +15,9 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.agentui.app.Widgets.MATCH;
 import static com.agentui.app.Widgets.WRAP;
@@ -33,6 +37,9 @@ public class SettingsActivity extends Activity {
     private EditText templateField;
     private TextView preview;
     private TextView templatePreview;
+    private TextView defaultAgentField;
+    private String defaultAgentId;
+    private final List<Agent> agents = new ArrayList<>();
 
     /**
      * Settings has no project in hand, so the template example is expanded
@@ -45,9 +52,12 @@ public class SettingsActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = new Prefs(this);
+        defaultAgentId = prefs.defaultAgent();
+        agents.addAll(Agent.FALLBACK);
         setContentView(buildRoot());
         updatePreview();
         updateTemplatePreview();
+        loadAgents();
     }
 
 
@@ -117,10 +127,28 @@ public class SettingsActivity extends Activity {
         form.addView(preview);
 
         form.addView(spacer(28));
-        TextView sessionSection = Widgets.text(this, "Projects", Theme.ACCENT_STRONG, 12, true);
+        TextView sessionSection = Widgets.text(this, "Sessions", Theme.ACCENT_STRONG, 12, true);
         sessionSection.setAllCaps(true);
         sessionSection.setLetterSpacing(0.06f);
         form.addView(sessionSection);
+        form.addView(spacer(12));
+
+        form.addView(label("Default agent"));
+        defaultAgentField = selector(defaultAgentLabel());
+        defaultAgentField.setOnClickListener(v -> chooseDefaultAgent());
+        form.addView(defaultAgentField);
+        TextView agentHint = Widgets.text(this,
+                "Preselected whenever you start a session. Server default follows "
+                        + "the backend's choice.",
+                Theme.MUTED, 12.5f, false);
+        Widgets.margins(agentHint, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(agentHint);
+
+        form.addView(spacer(28));
+        TextView projectSection = Widgets.text(this, "Projects", Theme.ACCENT_STRONG, 12, true);
+        projectSection.setAllCaps(true);
+        projectSection.setLetterSpacing(0.06f);
+        form.addView(projectSection);
         form.addView(spacer(12));
 
         form.addView(label("Projects directory"));
@@ -264,9 +292,63 @@ public class SettingsActivity extends Activity {
             return;
         }
         prefs.save(host, port, tlsSwitch.isChecked(), defaultDirField.getText().toString(),
-                templateField.getText().toString());
+                defaultAgentId, templateField.getText().toString());
         toast("Saved");
         finish();
+    }
+
+    /** Refresh the chooser from the configured server; fallback stays usable offline. */
+    private void loadAgents() {
+        if (!prefs.isConfigured()) return;
+        new Api(this).listAgents(new Api.Cb<List<Agent>>() {
+            @Override public void onResult(List<Agent> list) {
+                if (list.isEmpty()) return;
+                agents.clear();
+                agents.addAll(list);
+                defaultAgentField.setText(defaultAgentLabel());
+            }
+
+            @Override public void onError(String message) {}
+        });
+    }
+
+    private void chooseDefaultAgent() {
+        // Keep indices stable if the server's answer lands while this is open.
+        final List<Agent> choices = new ArrayList<>(agents);
+        CharSequence[] labels = new CharSequence[choices.size() + 1];
+        labels[0] = "Server default";
+        int checked = 0;
+        for (int i = 0; i < choices.size(); i++) {
+            labels[i + 1] = choices.get(i).name;
+            if (choices.get(i).id.equals(defaultAgentId)) checked = i + 1;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Default agent")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    defaultAgentId = which == 0 ? "" : choices.get(which - 1).id;
+                    defaultAgentField.setText(defaultAgentLabel());
+                    dialog.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String defaultAgentLabel() {
+        return defaultAgentId == null || defaultAgentId.isEmpty()
+                ? "Server default" : Agent.label(agents, defaultAgentId);
+    }
+
+    /** A field-shaped tap target that opens a chooser. */
+    private TextView selector(String value) {
+        TextView t = Widgets.text(this, value, Theme.INK, 15, false);
+        t.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
+        int p = Theme.dp(this, 12);
+        t.setPadding(p, 0, p, 0);
+        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setMinimumHeight(Theme.dp(this, 44));
+        t.setLayoutParams(lp(MATCH, WRAP));
+        t.setClickable(true);
+        return t;
     }
 
     /* ---------------------------------------------------------------- */

@@ -26,6 +26,16 @@ public class AgentTest {
     }
 
     @Test
+    public void aSavedPreferenceIsPreselected() {
+        assertEquals(2, Agent.defaultIndex(THREE, "pi"));
+    }
+
+    @Test
+    public void anUnavailablePreferenceFallsBackToTheServerDefault() {
+        assertEquals(1, Agent.defaultIndex(THREE, "codex"));
+    }
+
+    @Test
     public void withNoFlagTheFirstListedWins() {
         // The server lists adapters in registration order, so the first is as
         // good a pick as any — and better than an out-of-range index.
