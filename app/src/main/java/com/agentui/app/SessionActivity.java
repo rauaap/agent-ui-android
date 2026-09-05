@@ -26,6 +26,10 @@ import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
 import static com.agentui.app.Widgets.MATCH;
 import static com.agentui.app.Widgets.WRAP;
 import static com.agentui.app.Widgets.lp;
@@ -38,6 +42,7 @@ public class SessionActivity extends Activity {
 
     static final String EXTRA_ID = "id";
     static final String EXTRA_NAME = "name";
+    static final String EXTRA_AGENT = "agent";
     static final String EXTRA_DIR = "dir";
     static final String EXTRA_PROJECT_DIR = "project_dir";
     static final String EXTRA_WORKTREE_ID = "worktree_id";
@@ -52,6 +57,9 @@ public class SessionActivity extends Activity {
     private Api api;
     private String sessionId;
     private String sessionName;
+    private String sessionAgent = "";
+    private final List<Agent> agents = new ArrayList<>(Agent.FALLBACK);
+    private final List<TextView> agentLabelViews = new ArrayList<>();
     private String status = "idle";
     private String workingDir;
     private String projectId = "";
@@ -124,6 +132,8 @@ public class SessionActivity extends Activity {
         api = new Api(this);
         sessionId = getIntent().getStringExtra(EXTRA_ID);
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
+        sessionAgent = getIntent().getStringExtra(EXTRA_AGENT);
+        if (sessionAgent == null) sessionAgent = "";
         workingDir = getIntent().getStringExtra(EXTRA_DIR);
         if (workingDir == null) workingDir = "";
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
@@ -143,6 +153,35 @@ public class SessionActivity extends Activity {
         applyStatus(status);
         connect();
         refreshSessionMetadata();
+        loadAgents();
+    }
+
+    /** Load the server's display name for the adapter used by this session. */
+    private void loadAgents() {
+        api.listAgents(new Api.Cb<List<Agent>>() {
+            @Override public void onResult(List<Agent> list) {
+                if (!list.isEmpty()) {
+                    agents.clear();
+                    agents.addAll(list);
+                }
+                updateAgentLabels();
+            }
+
+            @Override public void onError(String message) {
+                // Keep the older-server fallback; the raw id is used for anything unknown.
+                updateAgentLabels();
+            }
+        });
+    }
+
+    private String agentChatLabel() {
+        String label = sessionAgent.isEmpty() ? "Agent" : Agent.label(agents, sessionAgent);
+        return label.toUpperCase(Locale.ROOT);
+    }
+
+    private void updateAgentLabels() {
+        String label = agentChatLabel();
+        for (TextView view : agentLabelViews) view.setText(label);
     }
 
     /**
@@ -158,6 +197,8 @@ public class SessionActivity extends Activity {
                     if (!session.id.equals(sessionId)) continue;
                     sessionName = session.name;
                     nameView.setText(session.name);
+                    sessionAgent = session.agent;
+                    updateAgentLabels();
                     projectId = session.projectId;
                     workingDir = session.workingDir;
                     worktreeId = session.worktreeId;
@@ -872,7 +913,8 @@ public class SessionActivity extends Activity {
 
         LinearLayout labelRow = Widgets.row(this);
         Widgets.margins(labelRow, 0, 0, 0, Theme.dp(this, 5));
-        TextView labelView = Widgets.text(this, "CLAUDE", Theme.ACCENT_STRONG, 11, true);
+        TextView labelView = Widgets.text(this, agentChatLabel(), Theme.ACCENT_STRONG, 11, true);
+        agentLabelViews.add(labelView);
         labelView.setLetterSpacing(0.07f);
         labelView.setLayoutParams(lp(0, WRAP, 1f));
         TextView copyBtn = Widgets.text(this, "COPY", Theme.FAINT, 11, true);

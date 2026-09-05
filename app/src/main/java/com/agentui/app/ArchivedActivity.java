@@ -236,6 +236,7 @@ public class ArchivedActivity extends Activity {
             Intent i = new Intent(this, SessionActivity.class);
             i.putExtra(SessionActivity.EXTRA_ID, s.id);
             i.putExtra(SessionActivity.EXTRA_NAME, s.name);
+            i.putExtra(SessionActivity.EXTRA_AGENT, s.agent);
             i.putExtra(SessionActivity.EXTRA_DIR, s.workingDir);
             i.putExtra(SessionActivity.EXTRA_PROJECT_DIR, project == null ? null : project.path);
             i.putExtra(SessionActivity.EXTRA_WORKTREE_ID, s.worktreeId);
