@@ -311,7 +311,8 @@ WebSocket: `ws(s)://<host>/ws/sessions/{id}`
 ```
 client -> server : { type: "input", text }
                    { type: "bash",  command }
-                   { type: "approval_response", request_id, behavior }
+                   { type: "approval_response", request_id, option_id }
+                   { type: "approval_response", request_id, behavior } # allow | deny
                    { type: "question_response", request_id, answers }
 
 server -> client : { type: "status",           status }   # idle | running | awaiting_approval
@@ -320,8 +321,9 @@ server -> client : { type: "status",           status }   # idle | running | awa
                    { type: "bash_input",       command }
                    { type: "bash_output",      command, stdout, stderr, exit_code,
                                                duration_ms, timed_out, truncated }
-                   { type: "tool_use",         tool, input }
-                   { type: "approval_request", request_id, tool, input, category, auto_approved? }
+                   { type: "tool_use",         call_id, action }
+                   { type: "approval_request", request_id, call_id, action, options,
+                                               auto_approved? }
                    { type: "approval_response", request_id, behavior, auto? }
                    { type: "question",         request_id, questions }
                    { type: "question_response", request_id, answers }
@@ -349,9 +351,17 @@ multiple-choice prompt the client renders as selectable options, sending the
 pick back as `answers` (keyed by question text; a label, or array of labels for
 `multiSelect`). Claude only.
 
+Tool calls and approvals carry the same provider-neutral canonical `action`,
+discriminated by `action.kind`: `command`, `read`, `edit`, `write`, `search`,
+`list`, `web`, `task`, or `other`. Their opaque `call_id` correlates one
+invocation with its approval. Historical rows without an action remain visible
+as raw JSON but are not interpreted or actionable.
+
 An `approval_request` with `auto_approved: true` was answered by a session toggle;
 the client renders it as a marker instead of Allow / Deny buttons, and the paired
-`approval_response` carries `auto: true`.
+`approval_response` carries `auto: true`. Named `options` are answered by
+`option_id`; an empty options array produces generic Allow / Deny controls that
+send `behavior`.
 
 `bash` runs a shell command in the session's working directory, bypassing the
 agent entirely — no tokens, no context, no approval. The `!` split is the

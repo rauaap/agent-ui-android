@@ -108,11 +108,10 @@ public class SessionActivity extends Activity {
     // pick — tracked separately from approvals, which gate whether a tool runs
     private View pendingQuestionCard;
     private String pendingQuestionId;
-    // the most recently rendered tool_use card, so an approval_request for the
-    // same call can replace it instead of duplicating the command/edit
+    // The most recently rendered canonical tool call. Only an immediately
+    // eligible approval carrying this exact opaque call ID may replace it.
     private View lastToolCard;
-    private String lastToolName;
-    private JSONObject lastToolInput;
+    private String lastToolCallId;
     // The bash card still waiting for its output. A command runs alongside the
     // agent, so its result can arrive several messages after the echo that
     // opened the card — the card is rebuilt in place rather than appended.
@@ -814,7 +813,7 @@ public class SessionActivity extends Activity {
                 break;
             case "tool_use":
                 agentBubble = null;
-                addToolUse(msg.optString("tool", "tool"), msg.optJSONObject("input"));
+                addToolUse(msg);
                 break;
             case "approval_request":
                 agentBubble = null;
@@ -826,6 +825,7 @@ public class SessionActivity extends Activity {
                 break;
             case "question":
                 agentBubble = null;
+                clearLastTool();
                 addQuestionRequest(msg);
                 break;
             case "question_response":
@@ -965,8 +965,14 @@ public class SessionActivity extends Activity {
         return b;
     }
 
-    private void addToolUse(String tool, JSONObject inputObj) {
-        final JSONObject in = inputObj == null ? new JSONObject() : inputObj;
+    private void addToolUse(JSONObject event) {
+        CanonicalAction action = CanonicalAction.parse(event.optJSONObject("action"));
+        String callId = strictString(event, "call_id");
+        if (action == null || callId == null || callId.isEmpty()) {
+            clearLastTool();
+            addUnsupportedToolEvent(event, !event.has("action"));
+            return;
+        }
 
         LinearLayout wrap = Widgets.column(this);
         wrap.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
@@ -978,27 +984,26 @@ public class SessionActivity extends Activity {
 
         TextView caret = Widgets.text(this, "▸", Theme.FAINT, 11, false);
         Widgets.margins(caret, 0, 0, Theme.dp(this, 8), 0);
-        TextView nameView = Widgets.text(this, tool.toUpperCase(), Theme.INFO, 11, true);
+        TextView nameView = Widgets.text(this, action.title().toUpperCase(Locale.ROOT),
+                Theme.INFO, 11, true);
         nameView.setLetterSpacing(0.04f);
         Widgets.margins(nameView, 0, 0, Theme.dp(this, 8), 0);
-        TextView summary = Widgets.mono(this, toolSummary(tool, in), Theme.MUTED, 12.5f);
+        TextView summary = Widgets.mono(this, action.summary(), Theme.MUTED, 12.5f);
         summary.setMaxLines(1);
         summary.setEllipsize(android.text.TextUtils.TruncateAt.END);
         summary.setLayoutParams(lp(0, WRAP, 1f));
         head.addView(caret);
         head.addView(nameView);
         head.addView(summary);
-        if ("Bash".equals(tool)) {
-            TextView copy = copyChip(in.optString("command", ""));
-            if (copy != null) {
-                Widgets.margins(copy, Theme.dp(this, 8), 0, 0, 0);
-                head.addView(copy);
-            }
+        TextView copy = copyChip(action.command());
+        if (copy != null) {
+            Widgets.margins(copy, Theme.dp(this, 8), 0, 0, 0);
+            head.addView(copy);
         }
 
-        View content = ToolFormat.body(this, tool, in);
+        View content = ToolFormat.body(this, action);
         if (content == null) {
-            content = Widgets.mono(this, prettyJson(in), 0xFFD4CFE0, 12.5f);
+            content = Widgets.mono(this, prettyJson(action.detail()), 0xFFD4CFE0, 12.5f);
         }
         if (content instanceof TextView) ((TextView) content).setTextIsSelectable(true);
         HorizontalScrollView body = new HorizontalScrollView(this);
@@ -1019,14 +1024,27 @@ public class SessionActivity extends Activity {
         append(wrap);
 
         lastToolCard = wrap;
-        lastToolName = tool;
-        lastToolInput = in;
+        lastToolCallId = callId;
+    }
+
+    private void addUnsupportedToolEvent(JSONObject event, boolean legacy) {
+        LinearLayout card = Widgets.column(this);
+        card.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
+        int p = Theme.dp(this, 12);
+        card.setPadding(p, p, p, p);
+        String notice = legacy ? "Legacy event from an older server version"
+                : "Unsupported or malformed tool action";
+        card.addView(Widgets.text(this, notice, Theme.AWAITING, 12, true));
+        TextView raw = Widgets.mono(this, prettyJson(event), Theme.MUTED, 12f);
+        raw.setTextIsSelectable(true);
+        Widgets.margins(raw, 0, Theme.dp(this, 8), 0, 0);
+        card.addView(raw);
+        append(card);
     }
 
     private void clearLastTool() {
         lastToolCard = null;
-        lastToolName = null;
-        lastToolInput = null;
+        lastToolCallId = null;
     }
 
     /* ---------------------------------------------------------------- */
@@ -1177,22 +1195,26 @@ public class SessionActivity extends Activity {
     }
 
     private void addApprovalRequest(JSONObject msg) {
-        final String id = msg.optString("request_id", "");
-        final String tool = msg.optString("tool", "tool");
-        final JSONObject in = msg.optJSONObject("input") == null
-                ? new JSONObject() : msg.optJSONObject("input");
-        // The backend answered this on the user's behalf (a session auto-approve
-        // toggle). It never blocks, so render it already resolved — no buttons,
-        // a green "auto-approved" tag — and skip tracking it as pending.
-        final boolean auto = msg.optBoolean("auto_approved", false);
-        final String category = msg.optString("category", "");
+        final String id = strictString(msg, "request_id");
+        final String callId = strictString(msg, "call_id");
+        final CanonicalAction action = CanonicalAction.parse(msg.optJSONObject("action"));
+        final JSONArray options = msg.optJSONArray("options");
+        final boolean autoFieldValid = !msg.has("auto_approved")
+                || Boolean.TRUE.equals(msg.opt("auto_approved"));
+        if (id == null || id.isEmpty() || callId == null || callId.isEmpty()
+                || action == null || !CanonicalAction.validOptions(options) || !autoFieldValid) {
+            clearLastTool();
+            addUnsupportedToolEvent(msg, !msg.has("action"));
+            return;
+        }
+        // Auto-approved requests never expose active controls while their normal
+        // approval_response is still in flight or being replayed.
+        final boolean auto = msg.has("auto_approved");
         final int accent = auto ? Theme.RUNNING : Theme.AWAITING;
 
-        // This approval is for the tool_use card we just rendered: drop that card
-        // so the command/edit isn't shown twice — this card replaces it.
-        if (lastToolCard != null && tool.equals(lastToolName)
-                && toolSummary(tool, in).equals(toolSummary(
-                        lastToolName, lastToolInput == null ? new JSONObject() : lastToolInput))) {
+        // Replace only the immediately eligible call with the exact same opaque
+        // invocation ID. The approval's repeated action renders independently.
+        if (lastToolCard != null && callId.equals(lastToolCallId)) {
             transcript.removeView(lastToolCard);
         }
         clearLastTool();
@@ -1211,14 +1233,14 @@ public class SessionActivity extends Activity {
         TextView tag = Widgets.text(this, auto ? "AUTO-APPROVED" : "APPROVAL REQUIRED", accent, 11, true);
         tag.setLetterSpacing(0.06f);
         Widgets.margins(tag, 0, 0, Theme.dp(this, 10), 0);
-        TextView toolView = Widgets.mono(this, tool, Theme.INK, 12.5f);
+        TextView toolView = Widgets.mono(this, action.title(), Theme.INK, 12.5f);
         toolView.setBackground(Theme.rounded(this, 0x40000000, 6));
         int tp = Theme.dp(this, 8);
         toolView.setPadding(tp, Theme.dp(this, 2), tp, Theme.dp(this, 2));
         head.addView(tag);
         head.addView(toolView);
-        if ("Bash".equals(tool)) {
-            TextView copy = copyChip(in.optString("command", ""));
+        {
+            TextView copy = copyChip(action.command());
             if (copy != null) {
                 // Height must be 0, not WRAP: a bare View measures wrap_content as
                 // the full available height (View.getDefaultSize), so under the
@@ -1231,9 +1253,9 @@ public class SessionActivity extends Activity {
         }
         card.addView(head);
 
-        // The command/edit, formatted and shown expanded — this is what you're
-        // approving. Unrecognised tools fall back to pretty JSON.
-        View formatted = ToolFormat.body(this, tool, in);
+        // The canonical action is repeated on the request, so this card never
+        // depends on retaining or looking up the preceding tool row.
+        View formatted = ToolFormat.body(this, action);
         if (formatted instanceof TextView) ((TextView) formatted).setTextIsSelectable(true);
         int bp = Theme.dp(this, 11);
         if (formatted != null) {
@@ -1246,9 +1268,9 @@ public class SessionActivity extends Activity {
             bsLp.topMargin = Theme.dp(this, 11);
             bodyScroll.setLayoutParams(bsLp);
             card.addView(bodyScroll);
-            addRawToggle(card, in);
+            addRawToggle(card, action.json());
         } else {
-            TextView pre = Widgets.mono(this, prettyJson(in), Theme.INK, 12.5f);
+            TextView pre = Widgets.mono(this, prettyJson(action.detail()), Theme.INK, 12.5f);
             pre.setTextIsSelectable(true);
             pre.setBackground(Theme.rounded(this, 0x47000000, 10, Theme.withAlpha(accent, 0x22), 1));
             pre.setPadding(bp, bp, bp, bp);
@@ -1259,9 +1281,7 @@ public class SessionActivity extends Activity {
         }
 
         if (auto) {
-            String label = "✓ Auto-approved";
-            if (!category.isEmpty()) label += " · " + category;
-            TextView marker = Widgets.text(this, label, accent, 14, true);
+            TextView marker = Widgets.text(this, "✓ Auto-approved", accent, 14, true);
             LinearLayout.LayoutParams mp = lp(WRAP, WRAP);
             mp.topMargin = Theme.dp(this, 10);
             card.addView(marker, mp);
@@ -1271,7 +1291,7 @@ public class SessionActivity extends Activity {
             return;
         }
 
-        View buttons = buildApprovalButtons(id, msg.optJSONArray("options"), card);
+        View buttons = buildApprovalButtons(id, options, card);
         card.addView(buttons);
         card.setTag(buttons); // remember the button container for finalize()
 
@@ -1388,9 +1408,9 @@ public class SessionActivity extends Activity {
         return o;
     }
 
-    /** A collapsed "raw input" disclosure that reveals the full JSON on tap. */
+    /** A collapsed disclosure that reveals the complete canonical action. */
     private void addRawToggle(LinearLayout card, JSONObject in) {
-        TextView toggle = Widgets.mono(this, "▸ raw input", Theme.FAINT, 11.5f);
+        TextView toggle = Widgets.mono(this, "▸ action JSON", Theme.FAINT, 11.5f);
         LinearLayout.LayoutParams tLp = lp(WRAP, WRAP);
         tLp.topMargin = Theme.dp(this, 9);
         toggle.setLayoutParams(tLp);
@@ -1409,7 +1429,7 @@ public class SessionActivity extends Activity {
         toggle.setOnClickListener(v -> {
             boolean open = raw.getVisibility() == View.VISIBLE;
             raw.setVisibility(open ? View.GONE : View.VISIBLE);
-            toggle.setText(open ? "▸ raw input" : "▾ raw input");
+            toggle.setText(open ? "▸ action JSON" : "▾ action JSON");
         });
 
         card.addView(toggle);
@@ -1878,41 +1898,8 @@ public class SessionActivity extends Activity {
         }
     }
 
-    private static String firstString(JSONObject in, String... keys) {
-        for (String k : keys) {
-            String v = in.optString(k, null);
-            if (v != null && !v.isEmpty()) return v;
-        }
-        return "";
-    }
-
-    private static String toolSummary(String tool, JSONObject in) {
-        if (in == null) return "";
-        switch (tool) {
-            case "Bash":
-                return in.optString("command", "");
-            case "Read":
-            case "Write":
-            case "Edit":
-            case "MultiEdit":
-                return firstString(in, "file_path", "path");
-            case "Glob":
-            case "Grep":
-                return firstString(in, "pattern", "query");
-            case "WebFetch":
-            case "WebSearch":
-                return firstString(in, "url", "query");
-            case "Task":
-                return firstString(in, "description");
-            default:
-                String direct = firstString(in, "command", "file_path", "path", "pattern", "query", "url", "description");
-                if (!direct.isEmpty()) return direct;
-                java.util.Iterator<String> it = in.keys();
-                while (it.hasNext()) {
-                    Object v = in.opt(it.next());
-                    if (v instanceof String && !((String) v).isEmpty()) return (String) v;
-                }
-                return "";
-        }
+    private static String strictString(JSONObject value, String key) {
+        Object raw = value == null ? null : value.opt(key);
+        return raw instanceof String ? (String) raw : null;
     }
 }

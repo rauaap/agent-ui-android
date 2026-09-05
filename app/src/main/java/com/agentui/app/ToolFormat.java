@@ -10,11 +10,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Builds human-readable views for {@code tool_use} payloads. The raw tool
- * arguments are JSON meant for machines; this turns the common cases into
- * something a person can scan — git-style diffs for file edits and a terminal
- * block for shell commands. Anything it doesn't recognise returns {@code null}
- * so the caller can fall back to pretty-printed JSON.
+ * Builds human-readable views for canonical tool actions: git-style diffs for
+ * file changes and a terminal block for commands. Other action kinds return
+ * {@code null} so the caller can show their canonical JSON.
  */
 final class ToolFormat {
     private ToolFormat() {}
@@ -27,15 +25,14 @@ final class ToolFormat {
      * A formatted body view for the collapsible tool card, or {@code null} when
      * the tool has no special formatting and the caller should show raw JSON.
      */
-    static View body(Context ctx, String tool, JSONObject in) {
-        if (in == null) return null;
-        switch (tool) {
-            case "Edit":
-            case "MultiEdit":
-            case "Write":
-                return diff(ctx, tool, in);
-            case "Bash":
-                return command(ctx, in);
+    static View body(Context ctx, CanonicalAction action) {
+        if (action == null) return null;
+        switch (action.kind()) {
+            case "edit":
+            case "write":
+                return diff(ctx, action);
+            case "command":
+                return command(ctx, action.json());
             default:
                 return null;
         }
@@ -45,26 +42,22 @@ final class ToolFormat {
     /* file edits → git-style diff                                      */
     /* ---------------------------------------------------------------- */
 
-    private static View diff(Context ctx, String tool, JSONObject in) {
+    private static View diff(Context ctx, CanonicalAction action) {
         SpannableStringBuilder sb = new SpannableStringBuilder();
-        switch (tool) {
-            case "MultiEdit":
-                JSONArray edits = in.optJSONArray("edits");
-                if (edits != null) {
-                    for (int i = 0; i < edits.length(); i++) {
-                        JSONObject e = edits.optJSONObject(i);
-                        if (e == null) continue;
-                        if (sb.length() > 0) line(sb, "", "⋯", CTX); // ⋯ separator
-                        appendDiff(sb, e.optString("old_string", ""), e.optString("new_string", ""));
-                    }
+        JSONObject value = action.json();
+        if ("edit".equals(action.kind())) {
+            JSONArray edits = value.optJSONArray("edits");
+            if (edits != null) {
+                for (int i = 0; i < edits.length(); i++) {
+                    JSONObject edit = edits.optJSONObject(i);
+                    if (edit == null) continue;
+                    if (sb.length() > 0) line(sb, "", "⋯", CTX);
+                    appendDiff(sb, edit.optString("old_text", ""),
+                            edit.optString("new_text", ""));
                 }
-                break;
-            case "Write":
-                appendDiff(sb, "", in.optString("content", ""));
-                break;
-            default: // Edit
-                appendDiff(sb, in.optString("old_string", ""), in.optString("new_string", ""));
-                break;
+            }
+        } else { // write
+            appendDiff(sb, "", value.optString("content", ""));
         }
         if (sb.length() == 0) return null;
         return Widgets.mono(ctx, sb, Theme.INK, 12.5f);
