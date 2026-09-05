@@ -104,6 +104,59 @@ public class MarkdownTest {
     }
 
     @Test
+    public void longerOuterFenceContainsShorterFencedExample() {
+        Markdown.Doc d = parse("````markdown\n```js\nconst x = 1;\n```\n````");
+        String expected = "```js\nconst x = 1;\n```";
+        assertEquals(expected, d.text);
+        assertEquals(expected, sub(d, only(d, Markdown.Type.CODE_BLOCK)));
+        assertEquals(1, d.spans.size());
+    }
+
+    @Test
+    public void fenceWithTrailingTextInsideBlockIsLiteral() {
+        Markdown.Doc d = parse("`````markdown\n````text\nliteral\n`````\nafter");
+        assertEquals("````text\nliteral\nafter", d.text);
+        assertEquals("````text\nliteral", sub(d, only(d, Markdown.Type.CODE_BLOCK)));
+    }
+
+    @Test
+    public void shorterBareFenceInsideBlockIsLiteral() {
+        Markdown.Doc d = parse("````markdown\n```\nafter\n````");
+        String expected = "```\nafter";
+        assertEquals(expected, d.text);
+        assertEquals(expected, sub(d, only(d, Markdown.Type.CODE_BLOCK)));
+    }
+
+    @Test
+    public void unterminatedFenceContinuesToEnd() {
+        Markdown.Doc d = parse("```text\nfirst\n```js\nlast");
+        String expected = "first\n```js\nlast";
+        assertEquals(expected, d.text);
+        assertEquals(expected, sub(d, only(d, Markdown.Type.CODE_BLOCK)));
+    }
+
+    @Test
+    public void inlineCodeCanContainLongerBacktickRun() {
+        Markdown.Doc d = parse("use `a``b` now");
+        assertEquals("use a``b now", d.text);
+        assertEquals("a``b", sub(d, only(d, Markdown.Type.CODE)));
+    }
+
+    @Test
+    public void inlineCodeCanContainShorterBacktickRun() {
+        Markdown.Doc d = parse("use ``a`b`` now");
+        assertEquals("use a`b now", d.text);
+        assertEquals("a`b", sub(d, only(d, Markdown.Type.CODE)));
+    }
+
+    @Test
+    public void inlineCodeNormalizesPaddingSpaces() {
+        Markdown.Doc d = parse("use ` code ` now");
+        assertEquals("use code now", d.text);
+        assertEquals("code", sub(d, only(d, Markdown.Type.CODE)));
+    }
+
+    @Test
     public void snakeCaseIsNotItalic() {
         // Underscores inside a word must not be treated as emphasis.
         Markdown.Doc d = parse("call some_long_name()");

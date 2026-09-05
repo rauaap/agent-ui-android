@@ -76,10 +76,16 @@ final class Markdown {
             String trimmed = line.trim();
 
             // fenced code block ``` ... ```
-            if (trimmed.startsWith("```")) {
+            int openingTicks = leadingBackticks(trimmed);
+            if (openingTicks > 0) {
                 StringBuilder code = new StringBuilder();
                 int j = i + 1;
-                while (j < lines.length && !lines[j].trim().startsWith("```")) {
+                while (j < lines.length) {
+                    String candidate = lines[j].trim();
+                    int ticks = leadingBackticks(candidate);
+                    boolean bareFence = ticks == candidate.length();
+                    if (bareFence && ticks >= openingTicks) break;
+
                     if (code.length() > 0) code.append('\n');
                     code.append(lines[j]);
                     j++;
@@ -132,6 +138,27 @@ final class Markdown {
         return new Doc(out.toString(), spans);
     }
 
+    /** Return the leading backtick count when it forms a fence. */
+    private static int leadingBackticks(String value) {
+        int count = 0;
+        while (count < value.length() && value.charAt(count) == '`') count++;
+        return count >= 3 ? count : 0;
+    }
+
+    /** Return the index immediately after a complete backtick run. */
+    private static int backtickRunEnd(String value, int start) {
+        int end = start;
+        while (end < value.length() && value.charAt(end) == '`') end++;
+        return end;
+    }
+
+    private static boolean isAllSpaces(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) != ' ') return false;
+        }
+        return true;
+    }
+
     /** Parse inline markers within {@code s}, appending text and spans. */
     private static void inline(String s, StringBuilder out, List<Span> spans) {
         int i = 0;
@@ -139,16 +166,39 @@ final class Markdown {
         while (i < n) {
             char c = s.charAt(i);
 
-            // inline code `...` — wins over everything inside it
+            // inline code `...` — delimiter runs must have equal lengths
             if (c == '`') {
-                int j = s.indexOf('`', i + 1);
-                if (j > i) {
-                    int start = out.length();
-                    out.append(s, i + 1, j);
-                    spans.add(new Span(start, out.length(), Type.CODE, 0, null));
-                    i = j + 1;
-                    continue;
+                int openingEnd = backtickRunEnd(s, i);
+                int delimiterLength = openingEnd - i;
+                int closingStart = openingEnd;
+                boolean closed = false;
+                while (closingStart < n) {
+                    if (s.charAt(closingStart) != '`') {
+                        closingStart++;
+                        continue;
+                    }
+                    int closingEnd = backtickRunEnd(s, closingStart);
+                    if (closingEnd - closingStart == delimiterLength) {
+                        String content = s.substring(openingEnd, closingStart);
+                        if (content.length() >= 2
+                                && content.charAt(0) == ' '
+                                && content.charAt(content.length() - 1) == ' '
+                                && !isAllSpaces(content)) {
+                            content = content.substring(1, content.length() - 1);
+                        }
+                        int start = out.length();
+                        out.append(content);
+                        spans.add(new Span(start, out.length(), Type.CODE, 0, null));
+                        i = closingEnd;
+                        closed = true;
+                        break;
+                    }
+                    closingStart = closingEnd;
                 }
+                if (closed) continue;
+                out.append(s, i, openingEnd);
+                i = openingEnd;
+                continue;
             }
 
             // link [text](url)
