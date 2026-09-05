@@ -202,10 +202,10 @@ preselect. It is the server's own registry, so the app keeps no list of agents:
 it renders what it is given and sends an id back. Fetched with the session list
 rather than once per process, since the answer belongs to whichever server the
 address in Settings currently points at. A **404 means an older server**, and so
-does any other failure as far as the picker is concerned: it falls back to
-`claude-code` / `opencode`, the two the app used to hardcode, which are exactly
-the agents a server without this endpoint has. An `agent` id no longer in the
-list — a session that outlived an adapter — renders as itself.
+does any other failure as far as the picker is concerned: it falls back to the
+server's default `claude-code` agent rather than advertising an optional adapter
+whose availability it cannot verify. An `agent` id no longer in the list — a
+session that outlived an adapter — renders as itself.
 
 `GET /projects` returns
 `[{ id, path, name, exists, is_git_repo, archived_at, session_count,

@@ -1284,7 +1284,7 @@ public class SessionActivity extends Activity {
         container.setLayoutParams(lp(MATCH, WRAP));
 
         // Optional reason forwarded to the agent on a deny (Claude Code delivers
-        // it inline; OpenCode re-prompts with it). Empty means no message.
+        // it inline). Empty means no message.
         final EditText denyField = new EditText(this);
         denyField.setHint("Deny with a message (optional)");
         denyField.setTextColor(Theme.INK);

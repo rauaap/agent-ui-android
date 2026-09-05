@@ -40,12 +40,12 @@ final class Agent {
 
     /**
      * What to offer against a server with no {@code /agents} — one predating the
-     * endpoint, which is also one that only ever had these two. Doubles as the
+     * endpoint. Offer only the default agent; the client must not advertise an
+     * optional adapter unless the server says it is available. Doubles as the
      * label table before the real list has landed.
      */
     static final List<Agent> FALLBACK = Arrays.asList(
-            new Agent("claude-code", "Claude Code", true),
-            new Agent("opencode", "OpenCode", false));
+            new Agent("claude-code", "Claude Code", true));
 
     /**
      * The label for an agent id, falling back to the id itself. An unknown id

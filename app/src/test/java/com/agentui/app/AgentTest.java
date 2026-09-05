@@ -59,9 +59,9 @@ public class AgentTest {
     }
 
     @Test
-    public void theFallbackListNamesTheAgentsAnOlderServerHad() {
+    public void theFallbackListOffersOnlyTheDefaultAgent() {
+        assertEquals(1, Agent.FALLBACK.size());
         assertEquals("Claude Code", Agent.label(Agent.FALLBACK, "claude-code"));
-        assertEquals("OpenCode", Agent.label(Agent.FALLBACK, "opencode"));
         assertEquals(0, Agent.defaultIndex(Agent.FALLBACK));
     }
 }
