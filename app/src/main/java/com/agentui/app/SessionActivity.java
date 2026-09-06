@@ -1143,7 +1143,7 @@ public class SessionActivity extends Activity {
     private LinearLayout newTranscript() {
         LinearLayout t = Widgets.column(this);
         int pad = Theme.dp(this, 16);
-        t.setPadding(pad, pad, pad, pad);
+        t.setPadding(pad, pad, pad, Theme.dp(this, 4));
         return t;
     }
 
