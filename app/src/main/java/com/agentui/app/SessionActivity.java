@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
@@ -29,6 +30,8 @@ import okhttp3.WebSocketListener;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static com.agentui.app.Widgets.MATCH;
 import static com.agentui.app.Widgets.WRAP;
@@ -84,6 +87,10 @@ public class SessionActivity extends Activity {
     private TextView sendBtn;
     private LinearLayout composerBox; // the bordered frame around input + send
     private boolean bashMode;         // the composer is showing command styling
+    private TextView completionBtn;   // touch-keyboard equivalent of Tab
+    private LinearLayout completionHolder;
+    private boolean completionOpen;
+    private int completionSearchSerial;
     /**
      * Archived sessions are read-only: the transcript replays as usual, but the
      * server refuses prompts and shell commands, so the composer is swapped for
@@ -98,6 +105,19 @@ public class SessionActivity extends Activity {
     private int reconnectAttempt = 0;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable reconnectRunnable;
+
+    // The path tree has an independent socket and failure domain. It is held
+    // while this session screen is visible, rather than only after `!` is typed,
+    // so the first completion has no scan/connect latency.
+    private volatile WebSocket fileSocket;
+    private volatile FileTreeCompletion fileTree = new FileTreeCompletion();
+    private boolean fileSocketWanted;
+    private boolean fileErrorTerminal;
+    private String fileState = "unavailable"; // connecting | ready | unavailable
+    private String fileError = "File completion is unavailable.";
+    private int fileReconnectAttempt;
+    private Runnable fileReconnectRunnable;
+    private final ExecutorService completionExecutor = Executors.newSingleThreadExecutor();
 
     // transcript state
     private TextView agentBubble;     // coalesce consecutive output chunks
@@ -207,6 +227,9 @@ public class SessionActivity extends Activity {
                     applyStatus(session.status);
                     if (projectDir == null && !projectId.isEmpty()) loadProjectPath();
                     else renderLocation();
+                    // Notification intents may initially carry only id/name, so
+                    // onStart could not subscribe until REST supplied the cwd.
+                    if (fileSocketWanted && fileSocket == null) connectFileSocket();
                     return;
                 }
             }
@@ -237,11 +260,15 @@ public class SessionActivity extends Activity {
         super.onStart();
         // While this session is on screen, suppress its completion notifications.
         WatchService.setViewing(sessionId);
+        fileSocketWanted = true;
+        connectFileSocket();
     }
 
     @Override
     protected void onStop() {
         WatchService.clearViewing(sessionId);
+        fileSocketWanted = false;
+        disconnectFileSocket();
         super.onStop();
     }
 
@@ -249,10 +276,12 @@ public class SessionActivity extends Activity {
     protected void onDestroy() {
         active = false;
         cancelReconnect();
+        cancelFileReconnect();
         if (socket != null) {
             socket.close(1000, null);
             socket = null;
         }
+        completionExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -361,6 +390,19 @@ public class SessionActivity extends Activity {
         scrollDownBtn.setLayoutParams(sdLp);
         scrollArea.addView(scrollDownBtn);
 
+        // Completion floats over the transcript instead of participating in
+        // the footer's vertical layout. Its bottom edge still sits immediately
+        // above the composer, but opening it no longer pushes scrollback up.
+        completionHolder = Widgets.column(this);
+        completionHolder.setVisibility(View.GONE);
+        completionHolder.setElevation(Theme.dp(this, 8));
+        FrameLayout.LayoutParams completionLp = new FrameLayout.LayoutParams(MATCH, WRAP);
+        completionLp.gravity = Gravity.BOTTOM;
+        int completionMargin = Theme.dp(this, 16);
+        completionLp.setMargins(completionMargin, 0, completionMargin, Theme.dp(this, 8));
+        completionHolder.setLayoutParams(completionLp);
+        scrollArea.addView(completionHolder);
+
         root.addView(scrollArea);
 
         // ---- composer ----
@@ -373,7 +415,10 @@ public class SessionActivity extends Activity {
 
         LinearLayout composer = Widgets.row(this);
         composerBox = composer;
-        composer.setGravity(Gravity.BOTTOM);
+        // Every control has a 44dp minimum/touch target. Keep them centred as
+        // the multiline input grows instead of moving fixed buttons with the
+        // EditText font's changing baseline.
+        composer.setGravity(Gravity.CENTER_VERTICAL);
         composer.setBackground(Theme.rounded(this, Theme.PANEL, 18, Theme.LINE, 1));
         int cp = Theme.dp(this, 8);
         composer.setPadding(cp, cp, cp, cp);
@@ -391,6 +436,7 @@ public class SessionActivity extends Activity {
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
             @Override public void afterTextChanged(android.text.Editable s) {
                 applyComposerMode();
+                if (completionOpen) refreshCompletions();
             }
         });
         input.setMaxLines(6);
@@ -402,11 +448,39 @@ public class SessionActivity extends Activity {
             if (actionId == EditorInfo.IME_ACTION_SEND) { sendPrompt(); return true; }
             return false;
         });
+        input.setOnKeyListener((v, keyCode, event) -> {
+            if (keyCode == KeyEvent.KEYCODE_TAB && event.getAction() == KeyEvent.ACTION_DOWN
+                    && bashMode) {
+                showCompletions();
+                return true;
+            }
+            return keyCode == KeyEvent.KEYCODE_TAB && bashMode;
+        });
         input.setLayoutParams(lp(0, WRAP, 1f));
         composer.addView(input);
 
+        completionBtn = Widgets.ghostButton(this, "Paths");
+        completionBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        // The generic text button has 16dp padding per side, leaving too little
+        // room inside this compact control and wrapping the final character.
+        completionBtn.setPadding(Theme.dp(this, 6), 0, Theme.dp(this, 6), 0);
+        completionBtn.setSingleLine(true);
+        completionBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams completeLp = lp(Theme.dp(this, 62), Theme.dp(this, 44));
+        completeLp.leftMargin = Theme.dp(this, 8);
+        completionBtn.setLayoutParams(completeLp);
+        completionBtn.setOnClickListener(v -> {
+            if (completionOpen) hideCompletions();
+            else showCompletions();
+        });
+        composer.addView(completionBtn);
+
         sendBtn = Widgets.primaryButton(this, "↑");
         sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        // Widgets.button uses 16dp horizontal padding for text labels. In a
+        // fixed 44dp square that leaves only 12dp for this 18sp glyph and clips
+        // it on some font scales, so the icon-sized button needs no extra pad.
+        sendBtn.setPadding(0, 0, 0, 0);
         LinearLayout.LayoutParams sendLp = lp(Theme.dp(this, 44), Theme.dp(this, 44));
         sendLp.leftMargin = Theme.dp(this, 8);
         sendBtn.setLayoutParams(sendLp);
@@ -557,21 +631,344 @@ public class SessionActivity extends Activity {
         composerBox.setBackground(Theme.rounded(
                 this, Theme.PANEL, 18, bash ? Theme.DANGER_LINE : Theme.LINE, 1));
         input.setHint(bash ? "Run a shell command…" : "Message the agent…");
+        completionBtn.setVisibility(bash ? View.VISIBLE : View.GONE);
+        if (!bash) hideCompletions();
 
-        // setInputType resets the typeface and can move the cursor, so restore
-        // both, then tell the running IME to pick the new flags up — without
-        // restartInput a keyboard that is already open keeps autocorrecting.
+        // setInputType() also reapplies TextView's single/multiline layout and
+        // resets line constraints. That made the EditText remeasure when `!`
+        // was entered, moving the buttons and producing an uneven baseline.
+        // Raw input type changes only what the IME sees; keep layout geometry
+        // explicit and stable while still swapping to the command keyboard.
         int start = input.getSelectionStart();
         int end = input.getSelectionEnd();
-        input.setInputType(bash ? bashInputType() : promptInputType());
+        input.setRawInputType(bash ? bashInputType() : promptInputType());
         input.setImeOptions(EditorInfo.IME_ACTION_SEND);
         input.setTypeface(bash ? Typeface.MONOSPACE : Typeface.DEFAULT);
+        input.setGravity(Gravity.CENTER_VERTICAL);
+        input.setMaxLines(6);
+        input.setMinHeight(Theme.dp(this, 44));
         int length = input.getText().length();
         input.setSelection(Math.min(Math.max(start, 0), length), Math.min(Math.max(end, 0), length));
 
         android.view.inputmethod.InputMethodManager imm =
                 (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (imm != null) imm.restartInput(input);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Bash path completion                                             */
+    /* ---------------------------------------------------------------- */
+
+    private void showCompletions() {
+        if (!bashMode) return;
+        completionOpen = true;
+        completionHolder.setVisibility(View.VISIBLE);
+        refreshCompletions();
+    }
+
+    private void hideCompletions() {
+        completionOpen = false;
+        completionSearchSerial++;
+        if (completionHolder != null) {
+            completionHolder.removeAllViews();
+            completionHolder.setVisibility(View.GONE);
+        }
+    }
+
+    private void refreshCompletions() {
+        if (!completionOpen || !bashMode) return;
+        if (!"ready".equals(fileState)) {
+            renderCompletionNotice("connecting".equals(fileState)
+                    ? "Loading paths…" : fileError, "unavailable".equals(fileState));
+            return;
+        }
+        FileTreeCompletion.Token token = FileTreeCompletion.tokenAtCursor(
+                input.getText().toString(), input.getSelectionStart());
+        if (token == null) {
+            renderCompletionNotice("Place the cursor in a shell token.", false);
+            return;
+        }
+        int serial = ++completionSearchSerial;
+        FileTreeCompletion tree = fileTree;
+        completionExecutor.execute(() -> {
+            List<FileTreeCompletion.Candidate> matches =
+                    tree.match(token.query, FileTreeCompletion.DISPLAY_LIMIT);
+            runOnUiThread(() -> {
+                if (serial == completionSearchSerial && completionOpen && bashMode
+                        && tree == fileTree) renderCompletionResults(matches);
+            });
+        });
+    }
+
+    private void renderCompletionNotice(String message, boolean retry) {
+        completionSearchSerial++;
+        completionHolder.removeAllViews();
+        completionHolder.setVisibility(View.VISIBLE);
+        LinearLayout row = Widgets.row(this);
+        row.setPadding(Theme.dp(this, 12), Theme.dp(this, 8),
+                Theme.dp(this, 8), Theme.dp(this, 8));
+        row.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
+        TextView text = Widgets.text(this, message, Theme.MUTED, 12.5f, false);
+        text.setLayoutParams(lp(0, WRAP, 1f));
+        row.addView(text);
+        if (retry) {
+            TextView button = Widgets.ghostButton(this, "Retry");
+            button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            button.setLayoutParams(lp(Theme.dp(this, 64), Theme.dp(this, 38)));
+            button.setOnClickListener(v -> retryFileSocket());
+            row.addView(button);
+        }
+        completionHolder.addView(row);
+    }
+
+    /** A naturally-sized ScrollView that becomes scrollable at a fixed cap. */
+    private static final class BoundedScrollView extends ScrollView {
+        private final int maximumHeight;
+
+        BoundedScrollView(android.content.Context context, int maximumHeight) {
+            super(context);
+            this.maximumHeight = maximumHeight;
+        }
+
+        @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int parentMode = View.MeasureSpec.getMode(heightMeasureSpec);
+            int available = parentMode == View.MeasureSpec.UNSPECIFIED
+                    ? maximumHeight : View.MeasureSpec.getSize(heightMeasureSpec);
+            int bounded = Math.min(maximumHeight, available);
+            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(
+                    bounded, View.MeasureSpec.AT_MOST));
+        }
+    }
+
+    private void renderCompletionResults(List<FileTreeCompletion.Candidate> matches) {
+        completionHolder.removeAllViews();
+        if (matches.isEmpty()) {
+            renderCompletionNotice("No matching paths", false);
+            return;
+        }
+        ScrollView listScroll = new BoundedScrollView(this, Theme.dp(this, 240));
+        listScroll.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
+        // Let Android measure the actual rows, then cap that natural height.
+        // Estimating it as count × minimumHeight created different leftover
+        // space for different fonts and result counts.
+        listScroll.setLayoutParams(lp(MATCH, WRAP));
+        listScroll.setFillViewport(false);
+        // A rounded drawable does not clip a View's scrollbar by itself. Clip
+        // the complete ScrollView rendering to that outline and inset the bar
+        // so its ends cannot paint across the rounded corners.
+        listScroll.setClipToOutline(true);
+        listScroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
+        LinearLayout list = Widgets.column(this);
+        int horizontal = Theme.dp(this, 12);
+        int vertical = Theme.dp(this, 8);
+        // Rows span the box so alternating backgrounds reach both edges; text
+        // carries its own inset instead of inheriting padding from the list.
+        list.setPadding(0, 0, 0, vertical);
+        // Slightly denser than Android's standard touch target while remaining
+        // comfortable for this compact completion list.
+        int rowHeight = Theme.dp(this, 32);
+        int rowIndex = 0;
+        for (FileTreeCompletion.Candidate candidate : matches) {
+            TextView result = Widgets.mono(this, candidate.path,
+                    candidate.directory ? Theme.INFO : Theme.INK, 13);
+            if ((rowIndex++ & 1) == 1) result.setBackgroundColor(Theme.PANEL);
+            result.setPadding(horizontal, 0, horizontal, 0);
+            result.setGravity(Gravity.CENTER_VERTICAL);
+            result.setSingleLine(true);
+            // setSingleLine() internally changes TextView's minimum-height mode
+            // to a line count. Apply the pixel touch target afterwards or it is
+            // silently overwritten (which is why 38, 48 and 100 looked alike).
+            result.setMinHeight(rowHeight);
+            result.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+            result.setClickable(true);
+            result.setFocusable(true);
+            result.setOnClickListener(v -> acceptCompletion(candidate.path));
+            list.addView(result, lp(MATCH, WRAP));
+        }
+        listScroll.addView(list);
+        completionHolder.addView(listScroll);
+    }
+
+    private void acceptCompletion(String path) {
+        String command = input.getText().toString();
+        FileTreeCompletion.Token token = FileTreeCompletion.tokenAtCursor(
+                command, input.getSelectionStart());
+        if (token == null) return;
+        String replacement = token.replace(command, path);
+        input.setText(replacement);
+        input.setSelection(Math.min(token.cursorAfter(path), replacement.length()));
+        hideCompletions();
+    }
+
+    private void connectFileSocket() {
+        cancelFileReconnect();
+        if (!fileSocketWanted || fileSocket != null || sessionId == null
+                || sessionId.isEmpty() || workingDir.isEmpty()) return;
+        fileErrorTerminal = false;
+        fileState = "connecting";
+        fileError = "Loading paths…";
+        fileTree = new FileTreeCompletion();
+        if (completionOpen) refreshCompletions();
+
+        Request request = new Request.Builder()
+                .url(api.prefs().wsBase() + "/ws/sessions/" + sessionId + "/files")
+                .build();
+        FileTreeCompletion connectionTree = fileTree;
+        fileSocket = api.http().newWebSocket(request, new WebSocketListener() {
+            @Override public void onMessage(WebSocket ws, String text) {
+                if (ws != fileSocket) return;
+                try {
+                    JSONObject message = new JSONObject(text);
+                    String type = requiredString(message, "type");
+                    if ("file_tree_snapshot".equals(type)) {
+                        connectionTree.applySnapshot(
+                                requiredString(message, "generation"),
+                                requiredLong(message, "revision"),
+                                requiredStringArray(message, "paths"));
+                        runOnUiThread(() -> {
+                            if (ws != fileSocket) return;
+                            fileState = "ready";
+                            fileError = "";
+                            fileReconnectAttempt = 0;
+                            if (completionOpen) refreshCompletions();
+                        });
+                    } else if ("file_tree_patch".equals(type)) {
+                        connectionTree.applyPatch(
+                                requiredString(message, "generation"),
+                                requiredLong(message, "base_revision"),
+                                requiredLong(message, "revision"),
+                                requiredStringArray(message, "added"),
+                                requiredStringArray(message, "removed"));
+                        runOnUiThread(() -> {
+                            if (ws == fileSocket && completionOpen) refreshCompletions();
+                        });
+                    } else if ("file_tree_error".equals(type)) {
+                        requiredString(message, "code");
+                        String supplied = requiredString(message, "message");
+                        runOnUiThread(() -> onFileTreeError(ws, supplied));
+                    } else {
+                        throw new FileTreeCompletion.ProtocolException(
+                                "Unknown file-tree frame type");
+                    }
+                } catch (Exception invalid) {
+                    runOnUiThread(() -> restartFileSocket(ws));
+                }
+            }
+
+            @Override public void onClosed(WebSocket ws, int code, String reason) {
+                runOnUiThread(() -> {
+                    if (code == 1008 && ws == fileSocket) {
+                        fileErrorTerminal = true;
+                        fileError = "The working directory is unavailable for path completion.";
+                    }
+                    onFileSocketDropped(ws);
+                });
+            }
+
+            @Override public void onFailure(WebSocket ws, Throwable t, Response response) {
+                runOnUiThread(() -> onFileSocketDropped(ws));
+            }
+        });
+    }
+
+    private void disconnectFileSocket() {
+        cancelFileReconnect();
+        WebSocket old = fileSocket;
+        fileSocket = null;
+        fileTree = new FileTreeCompletion();
+        fileState = "unavailable";
+        fileError = "File completion is unavailable while this screen is inactive.";
+        if (old != null) old.close(1000, null);
+        if (completionOpen) refreshCompletions();
+    }
+
+    private void onFileTreeError(WebSocket ws, String message) {
+        if (ws != fileSocket) return;
+        fileErrorTerminal = true;
+        fileState = "unavailable";
+        fileError = message;
+        fileTree = new FileTreeCompletion();
+        if (completionOpen) refreshCompletions();
+        // The server closes after this frame. The terminal flag prevents its
+        // close callback from creating a deterministic error retry loop.
+    }
+
+    private void onFileSocketDropped(WebSocket ws) {
+        if (ws != fileSocket) return;
+        fileSocket = null;
+        fileTree = new FileTreeCompletion();
+        fileState = "unavailable";
+        if (!fileErrorTerminal) {
+            fileError = "Path synchronization disconnected. Reconnecting…";
+        }
+        if (completionOpen) refreshCompletions();
+        if (!fileSocketWanted || fileErrorTerminal) return;
+        long delay = Math.min(1000L * (1L << Math.min(fileReconnectAttempt, 4)), 10000L);
+        fileReconnectAttempt++;
+        fileReconnectRunnable = this::connectFileSocket;
+        handler.postDelayed(fileReconnectRunnable, delay);
+    }
+
+    /** A malformed or out-of-order frame requires a fresh authoritative snapshot. */
+    private void restartFileSocket(WebSocket ws) {
+        if (ws != fileSocket) return;
+        fileSocket = null;
+        fileTree = new FileTreeCompletion();
+        fileState = "unavailable";
+        fileError = "Path synchronization was out of date. Reconnecting…";
+        ws.close(1002, "Invalid file-tree sequence");
+        if (completionOpen) refreshCompletions();
+        if (fileSocketWanted) {
+            fileReconnectRunnable = this::connectFileSocket;
+            handler.postDelayed(fileReconnectRunnable, 500);
+        }
+    }
+
+    private void retryFileSocket() {
+        WebSocket old = fileSocket;
+        fileSocket = null;
+        if (old != null) old.close(1000, null);
+        fileErrorTerminal = false;
+        fileReconnectAttempt = 0;
+        connectFileSocket();
+    }
+
+    private void cancelFileReconnect() {
+        if (fileReconnectRunnable != null) {
+            handler.removeCallbacks(fileReconnectRunnable);
+            fileReconnectRunnable = null;
+        }
+    }
+
+    private static String requiredString(JSONObject object, String key) throws Exception {
+        Object value = object.opt(key);
+        if (!(value instanceof String)) throw new Exception("Missing string " + key);
+        return (String) value;
+    }
+
+    private static long requiredLong(JSONObject object, String key) throws Exception {
+        Object value = object.opt(key);
+        if (!(value instanceof Byte) && !(value instanceof Short)
+                && !(value instanceof Integer) && !(value instanceof Long)) {
+            throw new Exception("Missing integer " + key);
+        }
+        long result = ((Number) value).longValue();
+        if (result < 0) throw new Exception("Invalid integer " + key);
+        return result;
+    }
+
+    private static List<String> requiredStringArray(JSONObject object, String key)
+            throws Exception {
+        Object value = object.opt(key);
+        if (!(value instanceof JSONArray)) throw new Exception("Missing array " + key);
+        JSONArray array = (JSONArray) value;
+        List<String> result = new ArrayList<>(array.length());
+        for (int i = 0; i < array.length(); i++) {
+            Object item = array.opt(i);
+            if (!(item instanceof String)) throw new Exception("Invalid path in " + key);
+            result.add((String) item);
+        }
+        return result;
     }
 
     /* ---------------------------------------------------------------- */

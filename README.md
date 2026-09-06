@@ -56,7 +56,9 @@ to install on a device).
   back in a red-bordered card the agent never sees. `\!` sends a prompt that
   really does start with an exclamation mark. While a `!` line is being typed the
   composer turns red and switches to a monospace keyboard with sentence
-  capitalisation and suggestions off.
+  capitalisation and suggestions off. **Paths** (or hardware Tab) completes the
+  shell token at the cursor from a live, locally searched file tree; directories
+  keep their trailing slash and every accepted path is safely shell-escaped.
 - **Background notifications** — toggle the bell on a session to watch it from a
   foreground service. You get a high-priority notification when the task finishes
   or needs your approval, even with the app off-screen; the watch stops once the
@@ -307,6 +309,14 @@ and is idempotent after a successful detach. It is offered later in Session
 settings, never automatically or as part of archive.
 
 WebSocket: `ws(s)://<host>/ws/sessions/{id}`
+
+The session screen also holds the server-only
+`ws(s)://<host>/ws/sessions/{id}/files` socket while visible. Its authoritative
+`file_tree_snapshot` and ordered `file_tree_patch` frames feed Bash path
+completion without per-keystroke requests. A generation/revision mismatch drops
+that cache and reconnects for a snapshot; an error frame displays its supplied
+message and waits for manual retry. The cache is invalidated whenever the socket
+is disconnected.
 
 ```
 client -> server : { type: "input", text }
