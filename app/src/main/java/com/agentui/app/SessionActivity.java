@@ -8,14 +8,16 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.widget.BaseAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -87,10 +89,17 @@ public class SessionActivity extends Activity {
     private TextView sendBtn;
     private LinearLayout composerBox; // the bordered frame around input + send
     private boolean bashMode;         // the composer is showing command styling
-    private TextView completionBtn;   // touch-keyboard equivalent of Tab
-    private LinearLayout completionHolder;
-    private boolean completionOpen;
-    private int completionSearchSerial;
+    // Session-wide file browser. Unlike Bash completion, this stays available
+    // in every composer mode and overlays the conversation from the right.
+    private LinearLayout pathPanel;
+    private TextView pathPanelHandle;
+    private EditText pathSearch;
+    private ListView pathList;
+    private TextView pathPanelNotice;
+    private TextView pathPanelCwd;
+    private PathAdapter pathAdapter;
+    private boolean pathPanelOpen;
+    private int pathPanelSearchSerial;
     /**
      * Archived sessions are read-only: the transcript replays as usual, but the
      * server refuses prompts and shell commands, so the composer is swapped for
@@ -290,10 +299,15 @@ public class SessionActivity extends Activity {
     /* ---------------------------------------------------------------- */
 
     private View buildRoot(String name) {
+        FrameLayout shell = new FrameLayout(this);
+        shell.setBackgroundColor(Theme.BG);
+        shell.setLayoutParams(new FrameLayout.LayoutParams(MATCH, MATCH));
+        Widgets.fitSystemWindows(shell);
+
         LinearLayout root = Widgets.column(this);
         root.setBackgroundColor(Theme.BG);
-        root.setLayoutParams(lp(MATCH, MATCH));
-        Widgets.fitSystemWindows(root);
+        root.setLayoutParams(new FrameLayout.LayoutParams(MATCH, MATCH));
+        shell.addView(root);
 
         // ---- header ----
         LinearLayout header = Widgets.row(this);
@@ -390,19 +404,6 @@ public class SessionActivity extends Activity {
         scrollDownBtn.setLayoutParams(sdLp);
         scrollArea.addView(scrollDownBtn);
 
-        // Completion floats over the transcript instead of participating in
-        // the footer's vertical layout. Its bottom edge still sits immediately
-        // above the composer, but opening it no longer pushes scrollback up.
-        completionHolder = Widgets.column(this);
-        completionHolder.setVisibility(View.GONE);
-        completionHolder.setElevation(Theme.dp(this, 8));
-        FrameLayout.LayoutParams completionLp = new FrameLayout.LayoutParams(MATCH, WRAP);
-        completionLp.gravity = Gravity.BOTTOM;
-        int completionMargin = Theme.dp(this, 16);
-        completionLp.setMargins(completionMargin, 0, completionMargin, Theme.dp(this, 8));
-        completionHolder.setLayoutParams(completionLp);
-        scrollArea.addView(completionHolder);
-
         root.addView(scrollArea);
 
         // ---- composer ----
@@ -436,7 +437,6 @@ public class SessionActivity extends Activity {
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
             @Override public void afterTextChanged(android.text.Editable s) {
                 applyComposerMode();
-                if (completionOpen) refreshCompletions();
             }
         });
         input.setMaxLines(6);
@@ -448,32 +448,8 @@ public class SessionActivity extends Activity {
             if (actionId == EditorInfo.IME_ACTION_SEND) { sendPrompt(); return true; }
             return false;
         });
-        input.setOnKeyListener((v, keyCode, event) -> {
-            if (keyCode == KeyEvent.KEYCODE_TAB && event.getAction() == KeyEvent.ACTION_DOWN
-                    && bashMode) {
-                showCompletions();
-                return true;
-            }
-            return keyCode == KeyEvent.KEYCODE_TAB && bashMode;
-        });
         input.setLayoutParams(lp(0, WRAP, 1f));
         composer.addView(input);
-
-        completionBtn = Widgets.ghostButton(this, "Paths");
-        completionBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        // The generic text button has 16dp padding per side, leaving too little
-        // room inside this compact control and wrapping the final character.
-        completionBtn.setPadding(Theme.dp(this, 6), 0, Theme.dp(this, 6), 0);
-        completionBtn.setSingleLine(true);
-        completionBtn.setVisibility(View.GONE);
-        LinearLayout.LayoutParams completeLp = lp(Theme.dp(this, 62), Theme.dp(this, 44));
-        completeLp.leftMargin = Theme.dp(this, 8);
-        completionBtn.setLayoutParams(completeLp);
-        completionBtn.setOnClickListener(v -> {
-            if (completionOpen) hideCompletions();
-            else showCompletions();
-        });
-        composer.addView(completionBtn);
 
         sendBtn = Widgets.primaryButton(this, "↑");
         sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
@@ -492,10 +468,209 @@ public class SessionActivity extends Activity {
         footer.addView(composerHolder);
         root.addView(footer);
 
-        return root;
+        buildPathPanel(shell);
+        return shell;
+    }
+
+    /** Build the right-hand file browser above the session without reflowing it. */
+    private void buildPathPanel(FrameLayout shell) {
+        int exposed = Theme.dp(this, 52);
+
+        pathPanel = Widgets.column(this);
+        pathPanel.setBackgroundColor(Theme.PANEL);
+        pathPanel.setElevation(Theme.dp(this, 12));
+        pathPanel.setVisibility(View.GONE);
+        FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(MATCH, MATCH);
+        panelLp.leftMargin = exposed;
+        pathPanel.setLayoutParams(panelLp);
+
+        LinearLayout panelHeader = Widgets.row(this);
+        int pad = Theme.dp(this, 16);
+        panelHeader.setPadding(pad, pad, pad, Theme.dp(this, 12));
+        TextView title = Widgets.text(this, "Paths", Theme.INK, 18, true);
+        title.setLayoutParams(lp(0, WRAP, 1f));
+        panelHeader.addView(title);
+        pathPanelCwd = Widgets.mono(this, workingDir, Theme.FAINT, 11.5f);
+        pathPanelCwd.setSingleLine(true);
+        pathPanelCwd.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        pathPanelCwd.setGravity(Gravity.END);
+        pathPanelCwd.setLayoutParams(lp(0, WRAP, 1f));
+        panelHeader.addView(pathPanelCwd);
+        pathPanel.addView(panelHeader);
+
+        View divider = new View(this);
+        divider.setBackgroundColor(Theme.LINE);
+        pathPanel.addView(divider, lp(MATCH, Math.max(1, Theme.dp(this, 0.5f))));
+
+        FrameLayout body = new FrameLayout(this);
+        body.setLayoutParams(lp(MATCH, 0, 1f));
+        pathList = new ListView(this);
+        pathList.setBackgroundColor(Theme.PANEL);
+        pathList.setDividerHeight(0);
+        pathList.setFastScrollEnabled(true);
+        pathList.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
+        pathAdapter = new PathAdapter();
+        pathList.setAdapter(pathAdapter);
+        pathList.setOnItemClickListener((parent, view, position, id) ->
+                insertPath(pathAdapter.items.get(position).path));
+        body.addView(pathList, new FrameLayout.LayoutParams(MATCH, MATCH));
+
+        pathPanelNotice = Widgets.text(this, "Loading paths…", Theme.MUTED, 13, false);
+        pathPanelNotice.setGravity(Gravity.CENTER);
+        pathPanelNotice.setPadding(pad, pad, pad, pad);
+        pathPanelNotice.setBackgroundColor(Theme.PANEL);
+        pathPanelNotice.setOnClickListener(v -> {
+            if ("unavailable".equals(fileState)) retryFileSocket();
+        });
+        body.addView(pathPanelNotice, new FrameLayout.LayoutParams(MATCH, MATCH));
+        pathPanel.addView(body);
+
+        View searchDivider = new View(this);
+        searchDivider.setBackgroundColor(Theme.LINE);
+        pathPanel.addView(searchDivider, lp(MATCH, Math.max(1, Theme.dp(this, 0.5f))));
+
+        LinearLayout searchBox = Widgets.column(this);
+        searchBox.setPadding(pad, Theme.dp(this, 12), pad, pad);
+        pathSearch = Widgets.pathField(this, "Filter paths…");
+        // pathField is already single-line. Calling setSingleLine() again here
+        // resets TextView's pixel minimum-height mode and collapses the field.
+        pathSearch.setMinHeight(Theme.dp(this, 44));
+        pathSearch.setLayoutParams(lp(MATCH, Theme.dp(this, 48)));
+        pathSearch.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                if (pathPanelOpen) refreshPathPanel();
+            }
+        });
+        searchBox.addView(pathSearch);
+        pathPanel.addView(searchBox);
+        shell.addView(pathPanel);
+
+        pathPanelHandle = Widgets.ghostButton(this, "‹");
+        pathPanelHandle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        pathPanelHandle.setPadding(0, 0, 0, 0);
+        pathPanelHandle.setBackground(null);
+        pathPanelHandle.setElevation(Theme.dp(this, 14));
+        pathPanelHandle.setContentDescription("Open paths panel");
+        pathPanelHandle.setOnClickListener(v -> setPathPanelOpen(!pathPanelOpen));
+        FrameLayout.LayoutParams handleLp = new FrameLayout.LayoutParams(
+                Theme.dp(this, 36), Theme.dp(this, 72));
+        handleLp.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
+        handleLp.rightMargin = Theme.dp(this, 4);
+        pathPanelHandle.setLayoutParams(handleLp);
+        shell.addView(pathPanelHandle);
+    }
+
+    private void setPathPanelOpen(boolean open) {
+        pathPanelOpen = open;
+        pathPanel.setVisibility(open ? View.VISIBLE : View.GONE);
+        pathPanelHandle.setText(open ? "›" : "‹");
+        pathPanelHandle.setContentDescription(open ? "Close paths panel" : "Open paths panel");
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) pathPanelHandle.getLayoutParams();
+        lp.gravity = (open ? Gravity.START : Gravity.END) | Gravity.CENTER_VERTICAL;
+        lp.leftMargin = open ? Theme.dp(this, 8) : 0;
+        lp.rightMargin = open ? 0 : Theme.dp(this, 4);
+        pathPanelHandle.setLayoutParams(lp);
+        if (open) {
+            refreshPathPanel();
+            pathSearch.requestFocus();
+            pathSearch.post(() -> {
+                android.view.inputmethod.InputMethodManager imm =
+                        (android.view.inputmethod.InputMethodManager)
+                                getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) imm.showSoftInput(pathSearch,
+                        android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+            });
+        } else {
+            pathPanelSearchSerial++;
+        }
+    }
+
+    private void refreshPathPanel() {
+        if (!pathPanelOpen) return;
+        if (!"ready".equals(fileState)) {
+            pathPanelSearchSerial++;
+            pathAdapter.setItems(java.util.Collections.emptyList());
+            pathList.setVisibility(View.GONE);
+            pathPanelNotice.setText("connecting".equals(fileState)
+                    ? "Loading paths…" : fileError + "\n\nTap to retry");
+            pathPanelNotice.setVisibility(View.VISIBLE);
+            return;
+        }
+        pathPanelNotice.setVisibility(View.GONE);
+        pathList.setVisibility(View.VISIBLE);
+        String query = pathSearch.getText().toString();
+        int serial = ++pathPanelSearchSerial;
+        FileTreeCompletion tree = fileTree;
+        completionExecutor.execute(() -> {
+            List<FileTreeCompletion.Candidate> matches = tree.match(query, Integer.MAX_VALUE);
+            runOnUiThread(() -> {
+                if (pathPanelOpen && serial == pathPanelSearchSerial && tree == fileTree) {
+                    pathAdapter.setItems(matches);
+                    if (matches.isEmpty()) {
+                        pathList.setVisibility(View.GONE);
+                        pathPanelNotice.setText("No matching paths");
+                        pathPanelNotice.setVisibility(View.VISIBLE);
+                    }
+                }
+            });
+        });
+    }
+
+    private void insertPath(String path) {
+        if (bashMode) {
+            insertBashPath(path);
+        } else {
+            int start = Math.max(0, input.getSelectionStart());
+            int end = Math.max(0, input.getSelectionEnd());
+            if (start > end) { int swap = start; start = end; end = swap; }
+            String old = input.getText().toString();
+            String replacement = old.substring(0, start) + path + old.substring(end);
+            input.setText(replacement);
+            input.setSelection(start + path.length());
+        }
+        setPathPanelOpen(false);
+    }
+
+    private final class PathAdapter extends BaseAdapter {
+        private List<FileTreeCompletion.Candidate> items = java.util.Collections.emptyList();
+
+        void setItems(List<FileTreeCompletion.Candidate> next) {
+            items = next;
+            notifyDataSetChanged();
+        }
+
+        @Override public int getCount() { return items.size(); }
+        @Override public FileTreeCompletion.Candidate getItem(int position) {
+            return items.get(position);
+        }
+        @Override public long getItemId(int position) { return position; }
+
+        @Override public View getView(int position, View convertView, ViewGroup parent) {
+            TextView row = convertView instanceof TextView
+                    ? (TextView) convertView : Widgets.mono(SessionActivity.this, "", Theme.INK, 13);
+            FileTreeCompletion.Candidate candidate = getItem(position);
+            row.setText(candidate.path);
+            row.setTextColor(candidate.directory ? Theme.INFO : Theme.INK);
+            row.setBackgroundColor((position & 1) == 1 ? Theme.PANEL2 : Theme.PANEL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setSingleLine(true);
+            row.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+            int horizontal = Theme.dp(SessionActivity.this, 16);
+            row.setPadding(horizontal, 0, horizontal, 0);
+            row.setMinHeight(Theme.dp(SessionActivity.this, 44));
+            return row;
+        }
+    }
+
+    @Override public void onBackPressed() {
+        if (pathPanelOpen) setPathPanelOpen(false);
+        else super.onBackPressed();
     }
 
     private void renderLocation() {
+        if (pathPanelCwd != null) pathPanelCwd.setText(workingDir);
         if (locationHolder == null) return;
         locationHolder.removeAllViews();
         if (!worktreeId.isEmpty()) {
@@ -631,8 +806,6 @@ public class SessionActivity extends Activity {
         composerBox.setBackground(Theme.rounded(
                 this, Theme.PANEL, 18, bash ? Theme.DANGER_LINE : Theme.LINE, 1));
         input.setHint(bash ? "Run a shell command…" : "Message the agent…");
-        completionBtn.setVisibility(bash ? View.VISIBLE : View.GONE);
-        if (!bash) hideCompletions();
 
         // setInputType() also reapplies TextView's single/multiline layout and
         // resets line constraints. That made the EditText remeasure when `!`
@@ -655,141 +828,7 @@ public class SessionActivity extends Activity {
         if (imm != null) imm.restartInput(input);
     }
 
-    /* ---------------------------------------------------------------- */
-    /* Bash path completion                                             */
-    /* ---------------------------------------------------------------- */
-
-    private void showCompletions() {
-        if (!bashMode) return;
-        completionOpen = true;
-        completionHolder.setVisibility(View.VISIBLE);
-        refreshCompletions();
-    }
-
-    private void hideCompletions() {
-        completionOpen = false;
-        completionSearchSerial++;
-        if (completionHolder != null) {
-            completionHolder.removeAllViews();
-            completionHolder.setVisibility(View.GONE);
-        }
-    }
-
-    private void refreshCompletions() {
-        if (!completionOpen || !bashMode) return;
-        if (!"ready".equals(fileState)) {
-            renderCompletionNotice("connecting".equals(fileState)
-                    ? "Loading paths…" : fileError, "unavailable".equals(fileState));
-            return;
-        }
-        FileTreeCompletion.Token token = FileTreeCompletion.tokenAtCursor(
-                input.getText().toString(), input.getSelectionStart());
-        if (token == null) {
-            renderCompletionNotice("Place the cursor in a shell token.", false);
-            return;
-        }
-        int serial = ++completionSearchSerial;
-        FileTreeCompletion tree = fileTree;
-        completionExecutor.execute(() -> {
-            List<FileTreeCompletion.Candidate> matches =
-                    tree.match(token.query, FileTreeCompletion.DISPLAY_LIMIT);
-            runOnUiThread(() -> {
-                if (serial == completionSearchSerial && completionOpen && bashMode
-                        && tree == fileTree) renderCompletionResults(matches);
-            });
-        });
-    }
-
-    private void renderCompletionNotice(String message, boolean retry) {
-        completionSearchSerial++;
-        completionHolder.removeAllViews();
-        completionHolder.setVisibility(View.VISIBLE);
-        LinearLayout row = Widgets.row(this);
-        row.setPadding(Theme.dp(this, 12), Theme.dp(this, 8),
-                Theme.dp(this, 8), Theme.dp(this, 8));
-        row.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
-        TextView text = Widgets.text(this, message, Theme.MUTED, 12.5f, false);
-        text.setLayoutParams(lp(0, WRAP, 1f));
-        row.addView(text);
-        if (retry) {
-            TextView button = Widgets.ghostButton(this, "Retry");
-            button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-            button.setLayoutParams(lp(Theme.dp(this, 64), Theme.dp(this, 38)));
-            button.setOnClickListener(v -> retryFileSocket());
-            row.addView(button);
-        }
-        completionHolder.addView(row);
-    }
-
-    /** A naturally-sized ScrollView that becomes scrollable at a fixed cap. */
-    private static final class BoundedScrollView extends ScrollView {
-        private final int maximumHeight;
-
-        BoundedScrollView(android.content.Context context, int maximumHeight) {
-            super(context);
-            this.maximumHeight = maximumHeight;
-        }
-
-        @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int parentMode = View.MeasureSpec.getMode(heightMeasureSpec);
-            int available = parentMode == View.MeasureSpec.UNSPECIFIED
-                    ? maximumHeight : View.MeasureSpec.getSize(heightMeasureSpec);
-            int bounded = Math.min(maximumHeight, available);
-            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(
-                    bounded, View.MeasureSpec.AT_MOST));
-        }
-    }
-
-    private void renderCompletionResults(List<FileTreeCompletion.Candidate> matches) {
-        completionHolder.removeAllViews();
-        if (matches.isEmpty()) {
-            renderCompletionNotice("No matching paths", false);
-            return;
-        }
-        ScrollView listScroll = new BoundedScrollView(this, Theme.dp(this, 240));
-        listScroll.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
-        // Let Android measure the actual rows, then cap that natural height.
-        // Estimating it as count × minimumHeight created different leftover
-        // space for different fonts and result counts.
-        listScroll.setLayoutParams(lp(MATCH, WRAP));
-        listScroll.setFillViewport(false);
-        // A rounded drawable does not clip a View's scrollbar by itself. Clip
-        // the complete ScrollView rendering to that outline and inset the bar
-        // so its ends cannot paint across the rounded corners.
-        listScroll.setClipToOutline(true);
-        listScroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
-        LinearLayout list = Widgets.column(this);
-        int horizontal = Theme.dp(this, 12);
-        int vertical = Theme.dp(this, 8);
-        // Rows span the box so alternating backgrounds reach both edges; text
-        // carries its own inset instead of inheriting padding from the list.
-        list.setPadding(0, 0, 0, vertical);
-        // Slightly denser than Android's standard touch target while remaining
-        // comfortable for this compact completion list.
-        int rowHeight = Theme.dp(this, 32);
-        int rowIndex = 0;
-        for (FileTreeCompletion.Candidate candidate : matches) {
-            TextView result = Widgets.mono(this, candidate.path,
-                    candidate.directory ? Theme.INFO : Theme.INK, 13);
-            if ((rowIndex++ & 1) == 1) result.setBackgroundColor(Theme.PANEL);
-            result.setPadding(horizontal, 0, horizontal, 0);
-            result.setGravity(Gravity.CENTER_VERTICAL);
-            result.setSingleLine(true);
-            // setSingleLine() internally changes TextView's minimum-height mode
-            // to a line count. Apply the pixel touch target afterwards or it is
-            // silently overwritten (which is why 38, 48 and 100 looked alike).
-            result.setMinHeight(rowHeight);
-            result.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-            result.setClickable(true);
-            result.setFocusable(true);
-            result.setOnClickListener(v -> acceptCompletion(candidate.path));
-            list.addView(result, lp(MATCH, WRAP));
-        }
-        listScroll.addView(list);
-        completionHolder.addView(listScroll);
-    }
-
-    private void acceptCompletion(String path) {
+    private void insertBashPath(String path) {
         String command = input.getText().toString();
         FileTreeCompletion.Token token = FileTreeCompletion.tokenAtCursor(
                 command, input.getSelectionStart());
@@ -797,7 +836,6 @@ public class SessionActivity extends Activity {
         String replacement = token.replace(command, path);
         input.setText(replacement);
         input.setSelection(Math.min(token.cursorAfter(path), replacement.length()));
-        hideCompletions();
     }
 
     private void connectFileSocket() {
@@ -808,7 +846,7 @@ public class SessionActivity extends Activity {
         fileState = "connecting";
         fileError = "Loading paths…";
         fileTree = new FileTreeCompletion();
-        if (completionOpen) refreshCompletions();
+        refreshFileViews();
 
         Request request = new Request.Builder()
                 .url(api.prefs().wsBase() + "/ws/sessions/" + sessionId + "/files")
@@ -830,7 +868,7 @@ public class SessionActivity extends Activity {
                             fileState = "ready";
                             fileError = "";
                             fileReconnectAttempt = 0;
-                            if (completionOpen) refreshCompletions();
+                            refreshFileViews();
                         });
                     } else if ("file_tree_patch".equals(type)) {
                         connectionTree.applyPatch(
@@ -840,7 +878,7 @@ public class SessionActivity extends Activity {
                                 requiredStringArray(message, "added"),
                                 requiredStringArray(message, "removed"));
                         runOnUiThread(() -> {
-                            if (ws == fileSocket && completionOpen) refreshCompletions();
+                            if (ws == fileSocket) refreshFileViews();
                         });
                     } else if ("file_tree_error".equals(type)) {
                         requiredString(message, "code");
@@ -879,7 +917,7 @@ public class SessionActivity extends Activity {
         fileState = "unavailable";
         fileError = "File completion is unavailable while this screen is inactive.";
         if (old != null) old.close(1000, null);
-        if (completionOpen) refreshCompletions();
+        refreshFileViews();
     }
 
     private void onFileTreeError(WebSocket ws, String message) {
@@ -888,7 +926,7 @@ public class SessionActivity extends Activity {
         fileState = "unavailable";
         fileError = message;
         fileTree = new FileTreeCompletion();
-        if (completionOpen) refreshCompletions();
+        refreshFileViews();
         // The server closes after this frame. The terminal flag prevents its
         // close callback from creating a deterministic error retry loop.
     }
@@ -901,7 +939,7 @@ public class SessionActivity extends Activity {
         if (!fileErrorTerminal) {
             fileError = "Path synchronization disconnected. Reconnecting…";
         }
-        if (completionOpen) refreshCompletions();
+        refreshFileViews();
         if (!fileSocketWanted || fileErrorTerminal) return;
         long delay = Math.min(1000L * (1L << Math.min(fileReconnectAttempt, 4)), 10000L);
         fileReconnectAttempt++;
@@ -917,11 +955,15 @@ public class SessionActivity extends Activity {
         fileState = "unavailable";
         fileError = "Path synchronization was out of date. Reconnecting…";
         ws.close(1002, "Invalid file-tree sequence");
-        if (completionOpen) refreshCompletions();
+        refreshFileViews();
         if (fileSocketWanted) {
             fileReconnectRunnable = this::connectFileSocket;
             handler.postDelayed(fileReconnectRunnable, 500);
         }
+    }
+
+    private void refreshFileViews() {
+        if (pathPanelOpen) refreshPathPanel();
     }
 
     private void retryFileSocket() {

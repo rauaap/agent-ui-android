@@ -56,9 +56,11 @@ to install on a device).
   back in a red-bordered card the agent never sees. `\!` sends a prompt that
   really does start with an exclamation mark. While a `!` line is being typed the
   composer turns red and switches to a monospace keyboard with sentence
-  capitalisation and suggestions off. **Paths** (or hardware Tab) completes the
-  shell token at the cursor from a live, locally searched file tree; directories
-  keep their trailing slash and every accepted path is safely shell-escaped.
+  capitalisation and suggestions off. The live file tree is available from the
+  floating **‹** handle in every mode: it opens an overlay file panel whose
+  bottom search uses component-prefix matching and ranking. Tapping a result
+  inserts it into prompts, or safely shell-escapes it into the token at the
+  cursor in a command.
 - **Background notifications** — toggle the bell on a session to watch it from a
   foreground service. You get a high-priority notification when the task finishes
   or needs your approval, even with the app off-screen; the watch stops once the
