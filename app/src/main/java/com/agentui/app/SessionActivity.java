@@ -1302,11 +1302,21 @@ public class SessionActivity extends Activity {
     private void commitReplay() {
         awaitingReplay = false;
         if (replayBuffer == null) return;
+
+        // The replacement transcript represents the same conversation, so keep
+        // the reader at the same offset. Bottom is treated specially: a raw
+        // offset would leave it above any entries that arrived during reconnect.
+        boolean wasAtBottom = isAtBottom();
+        int previousScrollY = scroll.getScrollY();
         scroll.removeAllViews();
         scroll.addView(replayBuffer);
         transcript = replayBuffer;
         replayBuffer = null;
-        scrollToBottom();
+        scroll.post(() -> {
+            if (wasAtBottom) scroll.fullScroll(View.FOCUS_DOWN);
+            else scroll.scrollTo(0, previousScrollY);
+            updateScrollButton();
+        });
     }
 
     private void handleMessage(String raw) {
@@ -1316,10 +1326,20 @@ public class SessionActivity extends Activity {
         } catch (Exception e) {
             return;
         }
+        String type = msg.optString("type", "");
+        boolean changesTranscript = switch (type) {
+            case "input", "output", "tool_use", "approval_request", "approval_response",
+                    "question", "question_response", "bash_input", "bash_output", "error" -> true;
+            default -> false;
+        };
+        // Snapshot this before handling the event. Content growth changes the
+        // answer, but should only follow that growth when the reader was already
+        // at the bottom. Reconnect replay mutates a detached transcript instead.
+        boolean keepAtBottom = changesTranscript && !awaitingReplay && isAtBottom();
+
         // Once any data has arrived, future (re)connects buffer their replay
         // off-screen rather than rendering into the live transcript.
         firstConnect = false;
-        String type = msg.optString("type", "");
         switch (type) {
             case "status":
                 // The server sends this right after the replay finishes, so it's
@@ -1400,6 +1420,7 @@ public class SessionActivity extends Activity {
             default:
                 break;
         }
+        if (changesTranscript && !awaitingReplay) updateScrollAfterMutation(keepAtBottom);
     }
 
     /** Add a replay/live entry unless it is the echo of our own successful send. */
@@ -1420,14 +1441,22 @@ public class SessionActivity extends Activity {
 
     private void append(View v) {
         transcript.addView(v, rowParams());
-        scrollToBottom();
+    }
+
+    private boolean isAtBottom() {
+        return !scroll.canScrollVertically(1);
+    }
+
+    /** Apply sticky-bottom behavior after content has had a chance to lay out. */
+    private void updateScrollAfterMutation(boolean keepAtBottom) {
+        scroll.post(() -> {
+            if (keepAtBottom) scroll.fullScroll(View.FOCUS_DOWN);
+            updateScrollButton();
+        });
     }
 
     private void scrollToBottom() {
-        scroll.post(() -> {
-            scroll.fullScroll(View.FOCUS_DOWN);
-            updateScrollButton();
-        });
+        updateScrollAfterMutation(true);
     }
 
     /** Show the floating down arrow only while the transcript can scroll further. */
@@ -1455,7 +1484,6 @@ public class SessionActivity extends Activity {
             if (agentRaw == null) agentRaw = new StringBuilder();
             agentRaw.append(text);
             agentBubble.setText(Markdown.render(this, agentRaw.toString(), Theme.INK));
-            scrollToBottom();
             return;
         }
         // The raw markdown is kept verbatim: the bubble shows the rendered form,
@@ -1623,7 +1651,6 @@ public class SessionActivity extends Activity {
                 // the agent message still streaming underneath it.
                 transcript.removeViewAt(index);
                 transcript.addView(bashCard(command, result), index, rowParams());
-                scrollToBottom();
                 return;
             }
         }
