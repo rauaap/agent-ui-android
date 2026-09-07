@@ -50,7 +50,11 @@ to install on a device).
   prompt for writes and/or shell commands; auto-approved tools still appear in the
   transcript, marked as such. Reads always run.
 - **Composer** — send prompts. Stays usable while the agent is running: a prompt
-  sent mid-turn is refused with a toast, but a command still goes through.
+  sent mid-turn is refused with a toast, but a command still goes through. Up and
+  Down keys walk the session's prompt and command history when a keyboard offers
+  them; otherwise, hold the composer and drag vertically. A stationary hold and
+  release retains the normal text-selection menu, and moving past the newest
+  history entry restores the unsent draft.
 - **Bash mode** — a message starting with `!` runs as a shell command in the
   session's working directory instead of going to the agent, and its output comes
   back in a red-bordered card the agent never sees. `\!` sends a prompt that
@@ -136,6 +140,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `Json.java`                | id decoding — server ids are JSON numbers, held as opaque strings (pure, unit tested) |
 | `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
 | `Composer.java`            | the `!` / `\!` split — prompt or shell command (pure, unit tested) |
+| `MessageHistory.java`      | prompt/command recall and draft restoration (pure, unit tested) |
 | `WorktreePath.java`        | the path template, its expansion, and lexical path normalising (pure, unit tested) |
 | `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 

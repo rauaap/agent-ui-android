@@ -8,7 +8,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.widget.BaseAdapter;
@@ -29,6 +32,7 @@ import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -89,6 +93,17 @@ public class SessionActivity extends Activity {
     private TextView sendBtn;
     private LinearLayout composerBox; // the bordered frame around input + send
     private boolean bashMode;         // the composer is showing command styling
+    private final MessageHistory messageHistory = new MessageHistory();
+    // Successful sends enter history before the server echoes them. Keep their
+    // composer forms here so those echoes do not add duplicates.
+    private final ArrayDeque<String> pendingHistoryEchoes = new ArrayDeque<>();
+    private boolean settingHistoryValue;
+    // A stationary long press remains EditText's native select/context gesture.
+    // Only a vertical drag begun after that delay is claimed for history.
+    private boolean historyTouchEligible;
+    private boolean historyTouchActive;
+    private float historyTouchDownY;
+    private float historyTouchAnchorY;
     // Session-wide file browser. Unlike Bash completion, this stays available
     // in every composer mode and overlays the conversation from the right.
     private LinearLayout pathPanel;
@@ -436,7 +451,74 @@ public class SessionActivity extends Activity {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
             @Override public void afterTextChanged(android.text.Editable s) {
+                // An edit after recall begins a new traversal. Programmatic
+                // replacements made by the traversal itself are excluded.
+                if (!settingHistoryValue) messageHistory.resetNavigation();
                 applyComposerMode();
+            }
+        });
+        input.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN || !event.hasNoModifiers()) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return navigateHistory(true);
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return navigateHistory(false);
+            return false;
+        });
+        final int historyTouchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        final int historyTouchStep = Math.max(historyTouchSlop * 2, Theme.dp(this, 32));
+        input.setOnTouchListener((v, event) -> {
+            // Screen coordinates stay stable when a recalled multiline entry
+            // changes the composer's height. View-local Y would jump as the
+            // EditText relayouts beneath a stationary finger, repeatedly
+            // traversing history in both directions and visibly flickering.
+            float y = event.getRawY();
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    historyTouchEligible = true;
+                    historyTouchActive = false;
+                    historyTouchDownY = y;
+                    historyTouchAnchorY = y;
+                    return false;
+                case MotionEvent.ACTION_MOVE:
+                    if (!historyTouchEligible) return false;
+                    float fromDown = y - historyTouchDownY;
+                    long heldFor = event.getEventTime() - event.getDownTime();
+                    if (!historyTouchActive) {
+                        if (heldFor < ViewConfiguration.getLongPressTimeout()) {
+                            // An ordinary drag before the hold delay belongs to
+                            // EditText (cursor placement or text scrolling).
+                            if (Math.abs(fromDown) > historyTouchSlop) {
+                                historyTouchEligible = false;
+                            }
+                            return false;
+                        }
+                        if (Math.abs(fromDown) < historyTouchStep) return false;
+                        historyTouchActive = true;
+                        historyTouchAnchorY = historyTouchDownY;
+                        input.cancelLongPress();
+                        // EditText received the down (and its native long press),
+                        // so explicitly end that gesture when history takes over.
+                        MotionEvent cancel = MotionEvent.obtain(event);
+                        cancel.setAction(MotionEvent.ACTION_CANCEL);
+                        input.onTouchEvent(cancel);
+                        cancel.recycle();
+                    }
+                    while (y <= historyTouchAnchorY - historyTouchStep) {
+                        navigateHistory(true);
+                        historyTouchAnchorY -= historyTouchStep;
+                    }
+                    while (y >= historyTouchAnchorY + historyTouchStep) {
+                        navigateHistory(false);
+                        historyTouchAnchorY += historyTouchStep;
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    boolean consumed = historyTouchActive;
+                    historyTouchEligible = false;
+                    historyTouchActive = false;
+                    return consumed;
+                default:
+                    return historyTouchActive;
             }
         });
         input.setMaxLines(6);
@@ -828,6 +910,24 @@ public class SessionActivity extends Activity {
         if (imm != null) imm.restartInput(input);
     }
 
+    /** Move one step through history, shared by keys and the long-press drag. */
+    private boolean navigateHistory(boolean older) {
+        String value = older
+                ? messageHistory.previous(input.getText().toString())
+                : messageHistory.next();
+        if (value == null) return false;
+        setComposerFromHistory(value);
+        return true;
+    }
+
+    /** Replace the composer from history without treating that replacement as typing. */
+    private void setComposerFromHistory(String value) {
+        settingHistoryValue = true;
+        input.setText(value);
+        input.setSelection(value.length());
+        settingHistoryValue = false;
+    }
+
     private void insertBashPath(String path) {
         String command = input.getText().toString();
         FileTreeCompletion.Token token = FileTreeCompletion.tokenAtCursor(
@@ -1121,6 +1221,11 @@ public class SessionActivity extends Activity {
         cancelReconnect();
         if (!active || sessionId == null) return;
 
+        // Every connection begins with a complete transcript replay. Rebuild
+        // history from that authoritative stream just as the transcript is.
+        messageHistory.clear();
+        pendingHistoryEchoes.clear();
+
         if (firstConnect) {
             // First open: stream the replay straight into the (empty) visible
             // transcript so content shows up progressively as it arrives.
@@ -1244,7 +1349,9 @@ public class SessionActivity extends Activity {
             case "input":
                 agentBubble = null;
                 clearLastTool();
-                addUserMessage(msg.optString("text", ""));
+                String prompt = msg.optString("text", "");
+                acceptHistoryEcho(MessageHistory.promptEntry(prompt));
+                addUserMessage(prompt);
                 break;
             case "output":
                 clearLastTool();
@@ -1274,7 +1381,9 @@ public class SessionActivity extends Activity {
             case "bash_input":
                 agentBubble = null;
                 clearLastTool();
-                addBashCommand(msg.optString("command", ""));
+                String command = msg.optString("command", "");
+                acceptHistoryEcho(MessageHistory.commandEntry(command));
+                addBashCommand(command);
                 break;
             case "bash_output":
                 fillBashOutput(msg.optString("command", ""), msg);
@@ -1291,6 +1400,12 @@ public class SessionActivity extends Activity {
             default:
                 break;
         }
+    }
+
+    /** Add a replay/live entry unless it is the echo of our own successful send. */
+    private void acceptHistoryEcho(String entry) {
+        if (entry.equals(pendingHistoryEchoes.peekFirst())) pendingHistoryEchoes.removeFirst();
+        else messageHistory.add(entry);
     }
 
     /* ---------------------------------------------------------------- */
@@ -2318,6 +2433,11 @@ public class SessionActivity extends Activity {
                 out.put("text", parsed.text);
             }
             if (socket.send(out.toString())) {
+                String historyEntry = parsed.bash
+                        ? MessageHistory.commandEntry(parsed.text)
+                        : MessageHistory.promptEntry(parsed.text);
+                messageHistory.add(historyEntry);
+                pendingHistoryEchoes.addLast(historyEntry);
                 input.setText("");
                 applyComposerMode();
             }
