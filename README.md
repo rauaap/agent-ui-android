@@ -108,6 +108,21 @@ to install on a device).
   it expands to. It is expanded entirely client-side — the server only ever
   receives a finished absolute path.
 
+- **Sandbox paths** — open **Settings ▸ Server sandbox paths** for shared defaults,
+  or **Project settings ▸ Project sandbox paths** for additions and overrides.
+  Server defaults use `GET /sandbox-paths` and `PATCH /sandbox-paths` with
+  `{"sandbox_paths": [...]}`; project lists use `GET /projects` and `PATCH /projects`.
+  Add/edit server file or directory paths and an **Allow writes** flag (off for new
+  entries), then **Save paths** to replace that scope's list atomically. Remote
+  paths are saved separately from device preferences; save a changed server
+  address before opening the editor. Project settings show inherited defaults;
+  removing an override restores its default, and resetting the whole project list
+  restores all inheritance. Exact-text overrides are marked in the UI; equivalent
+  spellings such as `~/config` and `$HOME/config` are matched only by the server.
+  Path expansion and validation happen on the server, and errors retain the draft.
+  Changes affect future sandboxed turns, never running processes. Read-only paths
+  can expose credentials; writable paths permit changes or deletion of host data.
+
 ## Layout
 
 ```
@@ -128,8 +143,10 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WorktreeForm.java`        | the create-worktree dialog, shared by the picker and that list |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
 | `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, auto-approve toggles, archive |
-| `ProjectSettingsActivity.java` | per-project settings: archive / unarchive the project and its sessions |
+| `ProjectSettingsActivity.java` | per-project settings: sandbox paths, archive / unarchive |
 | `SettingsActivity.java`    | server address + projects directory form (persisted) + the way in to Archived |
+| `SandboxPathsActivity.java` | shared server/project sandbox-path editor with inheritance and atomic saves |
+| `SandboxPath.java` | original path strings, permissions, and whole-list payloads |
 | `ArchivedActivity.java`    | everything archived: projects, then the sessions under live projects, each with Restore |
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |

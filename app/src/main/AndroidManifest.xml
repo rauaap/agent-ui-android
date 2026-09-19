@@ -43,6 +43,10 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
         <activity
+            android:name=".SandboxPathsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".ProjectSettingsActivity"
             android:exported="false" />
         <activity

@@ -26,6 +26,8 @@ import okhttp3.ResponseBody;
  * Thin REST client for the agent backend. All callbacks are delivered on the
  * main thread. Mirrors the web front-end's fetch() calls:
  *   GET    /agents
+ *   GET    /sandbox-paths
+ *   PATCH  /sandbox-paths
  *   GET    /projects
  *   POST   /projects
  *   PATCH  /projects
@@ -117,6 +119,20 @@ final class Api {
             for (int i = 0; i < arr.length(); i++) out.add(Agent.from(arr.getJSONObject(i)));
             return out;
         });
+    }
+
+    void getSandboxPaths(Cb<List<SandboxPath>> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/sandbox-paths").get().build();
+        enqueue(req, cb, body -> SandboxPath.from(new JSONObject(body).getJSONArray("sandbox_paths")));
+    }
+
+    /** Replaces only this scope's list; never sends inherited entries or archive flags. */
+    void saveSandboxPaths(String projectPath, List<SandboxPath> paths, Cb<List<SandboxPath>> cb) {
+        Request req = new Request.Builder()
+                .url(prefs.httpBase() + (projectPath == null ? "/sandbox-paths" : "/projects"))
+                .patch(RequestBody.create(SandboxPath.replacement(projectPath, paths).toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> SandboxPath.from(new JSONObject(body).getJSONArray("sandbox_paths")));
     }
 
     void listProjects(Cb<List<Project>> cb) {
@@ -464,7 +480,7 @@ final class Api {
         // Session routes type their {id} as an int, so a malformed id is
         // rejected before the handler runs: 422, not the 404 that means the
         // session is gone. Either way it is our bug, not a missing session.
-        if (code == 422) return "Server rejected the request (bad id)";
+        if (code == 422) return "Server rejected the request (invalid fields)";
         return "Server error " + code;
     }
 

@@ -198,6 +198,23 @@ public class SettingsActivity extends Activity {
         save.setOnClickListener(v -> save());
         form.addView(save);
 
+        form.addView(spacer(28));
+        TextView sandboxPaths = Widgets.ghostButton(this, "Server sandbox paths ›");
+        sandboxPaths.setOnClickListener(v -> {
+            // The remote editor always uses the saved connection, never a partially edited address.
+            if (!prefs.isConfigured()
+                    || !hostField.getText().toString().trim().equals(prefs.host())
+                    || !portField.getText().toString().trim().equals(String.valueOf(prefs.port()))
+                    || tlsSwitch.isChecked() != prefs.tls()) {
+                toast("Save the server address first, then reopen Settings.");
+                return;
+            }
+            startActivity(new android.content.Intent(this, SandboxPathsActivity.class));
+        });
+        form.addView(sandboxPaths);
+        form.addView(Widgets.text(this, "Edit shared defaults on the saved server. Saved separately from device preferences.",
+                Theme.MUTED, 12.5f, false));
+
         // ---- archived ----
         // Below Save, because it navigates away rather than editing the form
         // the button belongs to.

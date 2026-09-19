@@ -21,7 +21,7 @@ import static com.agentui.app.Widgets.lp;
  * Per-project settings, reached from the gear on a project's session list —
  * the counterpart of {@link SessionSettingsActivity} one level up.
  *
- * <p>Archiving is all it holds, and it is one call: {@code PATCH /projects}
+ * <p>Sandbox paths have a separate atomic editor. Archiving is one call: {@code PATCH /projects}
  * cascades to every session in the project, and unarchiving restores exactly
  * the ones that cascade took. There is no client-side bookkeeping to do, and
  * no per-session loop — the one bulk operation the API has is this one.
@@ -99,6 +99,12 @@ public class ProjectSettingsActivity extends Activity {
             form.addView(path);
         }
 
+        form.addView(spacer(28));
+        TextView sandboxPaths = Widgets.ghostButton(this, "Project sandbox paths ›");
+        sandboxPaths.setEnabled(projectDir != null);
+        sandboxPaths.setOnClickListener(v -> startActivity(new Intent(this, SandboxPathsActivity.class)
+                .putExtra(SandboxPathsActivity.EXTRA_PROJECT_PATH, projectDir)));
+        form.addView(sandboxPaths);
         form.addView(spacer(28));
         form.addView(section("Archive"));
         form.addView(spacer(12));

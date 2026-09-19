@@ -1,6 +1,10 @@
 package com.agentui.app;
 
+import org.json.JSONException;
 import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * A project — a working directory registered server-side, plus the aggregates
@@ -13,6 +17,8 @@ final class Project {
      * back or compared as one. Empty from a server old enough not to send one.
      */
     final String id;
+    final List<SandboxPath> sandboxPaths;
+    final boolean hasSandboxPaths;
     final String path;
     final String name;
     /** Live sessions only — the archived ones are counted separately. */
@@ -41,6 +47,15 @@ final class Project {
 
     Project(String id, String path, String name, int sessionCount, int archivedSessionCount,
             String lastActiveAt, String archivedAt, boolean exists, boolean isGitRepo) {
+        this(id, path, name, sessionCount, archivedSessionCount, lastActiveAt, archivedAt,
+                exists, isGitRepo, new ArrayList<>(), false);
+    }
+
+    private Project(String id, String path, String name, int sessionCount, int archivedSessionCount,
+            String lastActiveAt, String archivedAt, boolean exists, boolean isGitRepo,
+            List<SandboxPath> sandboxPaths, boolean hasSandboxPaths) {
+        this.sandboxPaths = sandboxPaths;
+        this.hasSandboxPaths = hasSandboxPaths;
         this.id = id;
         this.path = path;
         this.name = name;
@@ -94,6 +109,12 @@ final class Project {
                 o.optBoolean("exists", true),
                 // Default false: a server that does not report it cannot make
                 // worktrees either, so the toggle stays hidden.
-                o.optBoolean("is_git_repo", false));
+                o.optBoolean("is_git_repo", false), pathsFrom(o), o.optJSONArray("sandbox_paths") != null);
+    }
+
+    private static List<SandboxPath> pathsFrom(JSONObject o) {
+        try {
+            return SandboxPath.from(o.optJSONArray("sandbox_paths"));
+        } catch (JSONException e) { throw new IllegalArgumentException(e); }
     }
 }
