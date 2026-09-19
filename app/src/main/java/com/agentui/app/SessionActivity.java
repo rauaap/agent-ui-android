@@ -286,6 +286,7 @@ public class SessionActivity extends Activity {
         WatchService.setViewing(sessionId);
         fileSocketWanted = true;
         connectFileSocket();
+        refreshSessionMetadata();
     }
 
     @Override
@@ -299,6 +300,7 @@ public class SessionActivity extends Activity {
     @Override
     protected void onDestroy() {
         active = false;
+        SessionState.get(api, sessionId).connection(false);
         cancelReconnect();
         cancelFileReconnect();
         if (socket != null) {
@@ -1255,7 +1257,12 @@ public class SessionActivity extends Activity {
         Request req = new Request.Builder().url(url).build();
         socket = api.http().newWebSocket(req, new WebSocketListener() {
             @Override public void onOpen(WebSocket ws, Response response) {
-                runOnUiThread(() -> reconnectAttempt = 0);
+                runOnUiThread(() -> {
+                    if (ws != socket) return;
+                    reconnectAttempt = 0;
+                    SessionState.get(api, sessionId).connection(true);
+                    refreshSessionMetadata();
+                });
             }
             @Override public void onMessage(WebSocket ws, String text) {
                 // Ignore stragglers from a superseded socket so they can't trigger
@@ -1273,6 +1280,7 @@ public class SessionActivity extends Activity {
 
     private void scheduleReconnect(WebSocket ws) {
         if (!active || ws != socket) return;
+        SessionState.get(api, sessionId).connection(false);
         long delay = Math.min(1000L * (1L << Math.min(reconnectAttempt, 4)), 10000L);
         reconnectAttempt++;
         reconnectRunnable = this::connect;
@@ -1342,6 +1350,7 @@ public class SessionActivity extends Activity {
         firstConnect = false;
         switch (type) {
             case "status":
+                SessionState.get(api, sessionId).status(msg.optString("status", "idle"));
                 // The server sends this right after the replay finishes, so it's
                 // the cue to swap a buffered reconnect in for the old scrollback.
                 if (awaitingReplay) commitReplay();
@@ -1361,6 +1370,7 @@ public class SessionActivity extends Activity {
                 renderLocation();
                 break;
             case "settings":
+                SessionState.get(api, sessionId).settings(msg);
                 // Toggles may change from another client; keep our cache fresh so
                 // the settings screen opens with the right state.
                 autoApproveWrite = msg.optBoolean("auto_approve_write", autoApproveWrite);
@@ -2448,6 +2458,11 @@ public class SessionActivity extends Activity {
                 out.put("type", "bash");
                 out.put("command", parsed.text);
             } else {
+                if (SessionState.get(api, sessionId).saving) {
+                    android.widget.Toast.makeText(this, "Wait for the sandbox setting to finish saving",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 if (isBusy()) {
                     // Rejected, but the text stays put: it is still worth sending
                     // once the turn ends, and it may be what you meant to run.

@@ -697,17 +697,29 @@ public class SessionListActivity extends Activity {
         final CharSequence[] agentLabels = new CharSequence[choices.size()];
         for (int i = 0; i < choices.size(); i++) agentLabels[i] = choices.get(i).name;
         final int[] agentIdx = {Agent.defaultIndex(choices, prefs.defaultAgent())};
+        android.widget.Switch sandbox = new android.widget.Switch(this);
+        sandbox.setText("Sandbox");
+        sandbox.setTextColor(Theme.INK);
+        sandbox.setChecked(true);
+        LinearLayout sandboxSection = Widgets.column(this);
+        sandboxSection.addView(sandbox);
+        sandboxSection.addView(Widgets.text(this,
+                "Restricts agent file access. Applies to agent turns, not direct shell commands.",
+                Theme.MUTED, 12.5f, false));
+        sandboxSection.setVisibility(Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? View.VISIBLE : View.GONE);
         TextView agent = selector(choices.get(agentIdx[0]).name);
         agent.setOnClickListener(av -> new AlertDialog.Builder(this)
                 .setTitle("Agent")
                 .setSingleChoiceItems(agentLabels, agentIdx[0], (d, which) -> {
                     agentIdx[0] = which;
                     agent.setText(agentLabels[which]);
+                    sandboxSection.setVisibility(Agent.supportsSandbox(choices.get(which).id) ? View.VISIBLE : View.GONE);
                     d.dismiss();
                 })
                 .setNegativeButton("Cancel", null)
                 .show());
         content.addView(agent);
+        content.addView(sandboxSection);
 
         // ---- worktree ----
         // Only offered for a project the server reports as a git repo: anywhere
@@ -753,6 +765,7 @@ public class SessionListActivity extends Activity {
 
             v.setEnabled(false);
             api.createSession(name, dir, choices.get(agentIdx[0]).id, worktreeId[0],
+                    Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? sandbox.isChecked() : null,
                     new Api.StatusCb<Session>() {
                         @Override public void onResult(Session session) {
                             dialog.dismiss();

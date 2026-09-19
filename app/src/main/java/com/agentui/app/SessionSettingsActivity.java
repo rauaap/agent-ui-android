@@ -62,12 +62,18 @@ public class SessionSettingsActivity extends Activity {
     private EditText nameField;
     private Switch writeSwitch;
     private Switch commandSwitch;
+    private Switch sandboxSwitch;
+    private LinearLayout sandboxRow;
+    private TextView sandboxHint;
+    private SessionState state;
+    private final Runnable stateListener = this::renderState;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         sessionId = getIntent().getStringExtra(EXTRA_ID);
+        state = SessionState.get(api, sessionId);
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
         status = getIntent().getStringExtra(EXTRA_STATUS);
         if (status == null) status = "idle";
@@ -81,6 +87,77 @@ public class SessionSettingsActivity extends Activity {
         if (worktreeId == null) worktreeId = "";
         publishResult();
         setContentView(buildRoot());
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        state.listen(stateListener);
+        state.loaded = false;
+        renderState();
+        api.listSessions(new Api.Cb<java.util.List<Session>>() {
+            @Override public void onResult(java.util.List<Session> sessions) {
+                for (Session s : sessions) if (s.id.equals(sessionId)) { renderState(); return; }
+                toast("Session not found");
+                finish();
+            }
+            @Override public void onError(String message) { toast(message); renderState(); }
+        });
+    }
+
+    @Override protected void onStop() {
+        state.unlisten(stateListener);
+        super.onStop();
+    }
+
+    private void renderState() {
+        if (sandboxSwitch == null) return;
+        Session s = state.session;
+        boolean supported = s != null && Agent.supportsSandbox(s.agent);
+        sandboxRow.setVisibility(supported && s.sandbox != null ? View.VISIBLE : View.GONE);
+        sandboxHint.setText(s == null ? "Loading session settings…"
+                : !supported ? "Sandbox not supported for this agent"
+                : s.sandbox == null ? "Sandbox unavailable on this server"
+                : "Restricts agent file access, not direct shell commands.\nSandbox can only be changed between turns.");
+        setSwitchSilently(sandboxSwitch, s != null && Boolean.TRUE.equals(s.sandbox), this::applySandbox);
+        sandboxSwitch.setEnabled(state.canSaveSandbox());
+        writeSwitch.setEnabled(!state.saving && !state.approvalSaving);
+        commandSwitch.setEnabled(!state.saving && !state.approvalSaving);
+        if (s != null) {
+            status = s.status;
+            autoApproveWrite = s.autoApproveWrite;
+            autoApproveCommand = s.autoApproveCommand;
+            setSwitchSilently(writeSwitch, autoApproveWrite, c -> applyAutoApprove("write", c));
+            setSwitchSilently(commandSwitch, autoApproveCommand, c -> applyAutoApprove("command", c));
+            publishResult();
+        }
+    }
+
+    private void applySandbox(boolean checked) {
+        boolean allowed = state.canSaveSandbox();
+        renderState(); // Keep the server-confirmed value until success.
+        if (!allowed) return;
+        state.saving = true;
+        state.changed();
+        api.setSandbox(sessionId, checked, new Api.StatusCb<Session>() {
+            @Override public void onResult(Session session) {
+                state.saving = false;
+                state.changed();
+            }
+            @Override public void onError(String message) {
+                state.saving = false;
+                state.changed();
+                toast(message);
+            }
+            @Override public void onHttpError(int code, String message) {
+                onError(message);
+                if (code == 404) {
+                    state.session = null;
+                    state.loaded = false;
+                    state.changed();
+                    finish();
+                }
+            }
+        });
     }
 
     private View buildRoot() {
@@ -152,6 +229,16 @@ public class SessionSettingsActivity extends Activity {
                         + "transcript. Reads always run.", Theme.MUTED, 12.5f, false);
         Widgets.margins(autoHint, 0, Theme.dp(this, 7), 0, 0);
         form.addView(autoHint);
+
+        form.addView(spacer(28));
+        form.addView(section("Sandbox"));
+        sandboxSwitch = new Switch(this);
+        sandboxRow = toggleRow("Sandbox", sandboxSwitch, false, this::applySandbox);
+        sandboxRow.setVisibility(View.GONE);
+        sandboxSwitch.setEnabled(false);
+        form.addView(sandboxRow);
+        sandboxHint = Widgets.text(this, "Loading session settings…", Theme.MUTED, 12.5f, false);
+        form.addView(sandboxHint);
 
         // ---- session / rename ----
         form.addView(spacer(28));
@@ -247,6 +334,7 @@ public class SessionSettingsActivity extends Activity {
         scroll.addView(form);
         root.addView(scroll);
 
+        renderState();
         return root;
     }
 
@@ -292,16 +380,20 @@ public class SessionSettingsActivity extends Activity {
      * didn't stick.
      */
     private void applyAutoApprove(String category, boolean checked) {
-        if (sessionId == null) return;
-        boolean write = "write".equals(category) ? checked : autoApproveWrite;
-        boolean command = "command".equals(category) ? checked : autoApproveCommand;
-        api.setAutoApprove(sessionId, write, command, new Api.Cb<Session>() {
+        if (sessionId == null || state.saving || state.approvalSaving) return;
+        state.approvalSaving = true;
+        state.changed();
+        api.setAutoApprove(sessionId, category, checked, new Api.Cb<Session>() {
             @Override public void onResult(Session session) {
+                state.approvalSaving = false;
+                state.changed();
                 autoApproveWrite = session.autoApproveWrite;
                 autoApproveCommand = session.autoApproveCommand;
                 publishResult();
             }
             @Override public void onError(String message) {
+                state.approvalSaving = false;
+                state.changed();
                 Switch sw = "write".equals(category) ? writeSwitch : commandSwitch;
                 boolean previous = "write".equals(category)
                         ? autoApproveWrite : autoApproveCommand;

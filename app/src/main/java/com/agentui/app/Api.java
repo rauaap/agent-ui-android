@@ -295,13 +295,14 @@ final class Api {
      * the old one, and one that doesn't ignores the new one.
      */
     void createSession(String name, String projectPath, String agent,
-                       String worktreeId, Cb<Session> cb) {
+                       String worktreeId, Boolean sandbox, Cb<Session> cb) {
         JSONObject payload = new JSONObject();
         try {
             payload.put("name", name);
             payload.put("project_path", projectPath);
             payload.put("working_dir", projectPath);
             payload.put("agent", agent);
+            if (sandbox != null) payload.put("sandbox", sandbox);
             // Omitted rather than sent as null for the plain case: the field is
             // optional, and an absent one reads the same to every server.
             if (worktreeId != null && !worktreeId.isEmpty()) {
@@ -363,11 +364,18 @@ final class Api {
         enqueue(req, cb, body -> Session.from(new JSONObject(body)));
     }
 
-    void setAutoApprove(String id, boolean write, boolean command, Cb<Session> cb) {
+    void setSandbox(String id, boolean sandbox, Cb<Session> cb) {
+        JSONObject payload = new JSONObject();
+        try { payload.put("sandbox", sandbox); } catch (Exception ignored) {}
+        Request req = new Request.Builder().url(prefs.httpBase() + "/sessions/" + id)
+                .patch(RequestBody.create(payload.toString(), JSON)).build();
+        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
+    }
+
+    void setAutoApprove(String id, String category, boolean checked, Cb<Session> cb) {
         JSONObject payload = new JSONObject();
         try {
-            payload.put("auto_approve_write", write);
-            payload.put("auto_approve_command", command);
+            payload.put("write".equals(category) ? "auto_approve_write" : "auto_approve_command", checked);
         } catch (Exception ignored) {}
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions/" + id)
@@ -403,6 +411,7 @@ final class Api {
 
     @SuppressWarnings("unchecked") // cb's type parameter is the caller's own T
     private <T> void enqueue(Request req, Cb<T> cb, Parser<T> parser) {
+        final long started = SessionState.snapshot();
         client.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {
                 post(() -> cb.onError(friendly(e)));
@@ -421,7 +430,18 @@ final class Api {
                         return;
                     }
                     final T value = parser.parse(body);
-                    post(() -> cb.onResult(value));
+                    post(() -> {
+                        if (value instanceof Session) {
+                            Session s = (Session) value;
+                            SessionState.get(Api.this, s.id).confirmed(s, started);
+                        } else if (value instanceof List) {
+                            for (Object item : (List<?>) value) if (item instanceof Session) {
+                                Session s = (Session) item;
+                                SessionState.get(Api.this, s.id).accept(s, started);
+                            }
+                        }
+                        cb.onResult(value);
+                    });
                 } catch (Exception e) {
                     post(() -> cb.onError(friendly(e)));
                 }

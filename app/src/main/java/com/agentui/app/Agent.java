@@ -30,6 +30,11 @@ final class Agent {
         this.isDefault = isDefault;
     }
 
+    /** Execution support on current servers; an absent session field is still unknown. */
+    static boolean supportsSandbox(String id) {
+        return "pi".equals(id) || "claude-code".equals(id);
+    }
+
     static Agent from(JSONObject o) {
         // Agent ids are minted by the server's registry, not its database, so
         // they are strings on every server and stay on plain optString.

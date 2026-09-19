@@ -41,6 +41,8 @@ final class Session {
     String archivedAt;
     // Per-session auto-approve toggles. Reads always run, so only the mutating
     // categories are switchable.
+    /** Null means an older server with no sandbox feature; never assume enabled. */
+    Boolean sandbox;
     boolean autoApproveWrite;
     boolean autoApproveCommand;
 
@@ -76,7 +78,7 @@ final class Session {
     }
 
     static Session from(JSONObject o) {
-        return new Session(
+        Session session = new Session(
                 // Ids arrive as JSON numbers and are held as strings; see Json.
                 Json.id(o, "id"),
                 o.optString("name", "(unnamed)"),
@@ -93,5 +95,7 @@ final class Session {
                 o.isNull("archived_at") ? "" : o.optString("archived_at", ""),
                 o.optBoolean("auto_approve_write", false),
                 o.optBoolean("auto_approve_command", false));
+        session.sandbox = o.opt("sandbox") instanceof Boolean ? (Boolean) o.opt("sandbox") : null;
+        return session;
     }
 }
