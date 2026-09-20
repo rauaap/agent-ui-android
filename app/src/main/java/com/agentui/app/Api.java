@@ -26,6 +26,7 @@ import okhttp3.ResponseBody;
  * Thin REST client for the agent backend. All callbacks are delivered on the
  * main thread. Mirrors the web front-end's fetch() calls:
  *   GET    /agents
+ *   GET    /usage
  *   GET    /sandbox-paths
  *   PATCH  /sandbox-paths
  *   GET    /projects
@@ -119,6 +120,23 @@ final class Api {
             for (int i = 0; i < arr.length(); i++) out.add(Agent.from(arr.getJSONObject(i)));
             return out;
         });
+    }
+
+    /**
+     * How much of each subscription's five-hour and weekly quota is spent.
+     *
+     * <p>Every call queries both providers live — there is no server-side cache
+     * and a response takes the better part of a second — so this is polled on
+     * the order of a minute, or on user action, never per frame.
+     *
+     * <p>A plan that is unauthenticated or unreachable reports null windows and
+     * a reason rather than failing the request, so the only failures that reach
+     * {@code onError} are this app's own connection to the server. A 404 means
+     * a server predating the endpoint, which {@link StatusCb} separates out.
+     */
+    void getUsage(Cb<Usage> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/usage").get().build();
+        enqueue(req, cb, body -> Usage.from(new JSONObject(body), System.currentTimeMillis()));
     }
 
     void getSandboxPaths(Cb<List<SandboxPath>> cb) {

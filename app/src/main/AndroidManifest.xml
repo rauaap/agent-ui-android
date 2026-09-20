@@ -52,6 +52,9 @@
         <activity
             android:name=".ArchivedActivity"
             android:exported="false" />
+        <activity
+            android:name=".UsageActivity"
+            android:exported="false" />
         <service
             android:name=".WatchService"
             android:exported="false"

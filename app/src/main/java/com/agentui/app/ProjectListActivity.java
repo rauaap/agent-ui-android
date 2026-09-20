@@ -108,7 +108,18 @@ public class ProjectListActivity extends Activity {
         brand.setLayoutParams(lp(0, WRAP, 1f));
         topbar.addView(brand);
 
+        // Subscription usage is server-wide, like the settings it sits beside,
+        // and belongs to no project on this list.
+        TextView usage = Widgets.ghostButton(this, "U");
+        usage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        usage.setPadding(0, 0, 0, 0); // square, matching the gear beside it
+        usage.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
+        usage.setOnClickListener(v -> startActivity(new Intent(this, UsageActivity.class)));
+        Widgets.margins(usage, 0, 0, Theme.dp(this, 8), 0);
+        topbar.addView(usage);
+
         TextView gear = Widgets.ghostButton(this, "⚙");
+        gear.setPadding(0, 0, 0, 0);
         gear.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
         gear.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
         Widgets.margins(gear, 0, 0, Theme.dp(this, 8), 0);

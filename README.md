@@ -96,6 +96,21 @@ to install on a device).
   Session settings. This releases only the database reference and preserves the
   same cwd as a `FORMER WORKTREE`; deleting that worktree later can make the
   session impossible to restore until the exact directory is recreated.
+- **Subscription usage** — the **U** button on the project list opens a panel of
+  meters: how much of each plan's five-hour and weekly quota is already spent,
+  what it resets to zero at, and how long that is away. The two rows are
+  **subscriptions, not agents** — `claude_code` and `codex` deliberately do not
+  match the agent ids, because one plan can back several harnesses, so nothing
+  here maps a session's agent onto a quota. Each plan is read independently: one
+  that is unauthenticated is shown as unconfigured while the other still reports
+  its numbers, and a rejected token says to re-authenticate on the server, which
+  does not refresh them. A plan that fails *transiently* keeps the last good
+  numbers, tagged `STALE` with the time they were read — but drops its
+  countdown, because Codex's five-hour window rolls and a cached reset time
+  would quietly drift. Every call queries both providers live, so the panel
+  refreshes about once a minute while open, and every countdown is recomputed
+  from the reset time that arrived with that read rather than ticked down
+  locally. A server without the endpoint says so.
 - **Settings** — the server host / port (and optional TLS), the projects
   directory, and the worktree path template are stored in `SharedPreferences`,
   so they **persist across app restarts and device reboots**. Set them via the ⚙
@@ -148,6 +163,9 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `SandboxPathsActivity.java` | shared server/project sandbox-path editor with inheritance and atomic saves |
 | `SandboxPath.java` | original path strings, permissions, and whole-list payloads |
 | `ArchivedActivity.java`    | everything archived: projects, then the sessions under live projects, each with Restore |
+| `UsageActivity.java`       | subscription usage: a meter per plan per window, polled about once a minute |
+| `Usage.java`               | the `/usage` response: windows, error classification, and carrying last good values across a transient failure (pure, unit tested) |
+| `Meter.java`               | the usage bar — severity-coloured fill on a wash of the same colour |
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
 | `Archive.java`             | live/archived split of the two list responses, and the archive's ordering (pure, unit tested) |
@@ -206,7 +224,7 @@ agent backend.
 The server lives in [rauaap/agent-ui-server](https://github.com/rauaap/agent-ui-server); this
 is the protocol this client speaks to it.
 
-REST: `GET /agents`, `GET /projects`, `POST /projects`, `PATCH /projects`,
+REST: `GET /agents`, `GET /usage`, `GET /projects`, `POST /projects`, `PATCH /projects`,
 `DELETE /projects`, `GET /worktrees`, `POST /worktrees`, `DELETE /worktrees/{id}`,
 `GET /sessions`, `POST /sessions`, `PATCH /sessions/{id}`, `DELETE /sessions/{id}`,
 `POST /sessions/{id}/detach-worktree`, `POST /sessions/{id}/stop`.
@@ -232,6 +250,27 @@ does any other failure as far as the picker is concerned: it falls back to the
 server's default `claude-code` agent rather than advertising an optional adapter
 whose availability it cannot verify. An `agent` id no longer in the list — a
 session that outlived an adapter — renders as itself.
+
+`GET /usage` returns `{ claude_code: {...}, codex: {...} }`, each
+`{ five_hour, weekly, error }` where a window is `{ used_percent, reset_at }` or
+`null`. `used_percent` is the share already **spent**, 0–100, rendered as it
+arrives; `reset_at` is Unix seconds and may be `null` on an otherwise successful
+read, which means the countdown is unavailable — never an epoch date to show.
+**Both keys are always present**, and a plan that is unauthenticated or
+unreachable reports null windows and a reason rather than failing the request,
+so each is read on its own and a non-null `error` never condemns the response.
+The app classifies the reason: `"not authenticated"` is unconfigured,
+`"HTTP 401"` needs a human to re-authenticate on the server, and `"HTTP <code>"`,
+`"unreachable: …"` — and anything a later server invents — are transient, which
+keeps the last good numbers on screen under a `STALE` tag until the next poll.
+**The keys are plans, not agents**: they intentionally differ from the ids in
+`GET /agents`, one subscription can back several harnesses, and a session's
+agent does not determine the quota it draws from. Every call queries both
+upstream providers live with no server-side cache, so the app polls on the order
+of a minute and only while the panel is open. Weekly `reset_at` is a fixed
+window, but Codex's five-hour one is **rolling** and moves on every poll until
+usage starts — so it is re-read rather than cached and counted down locally. A
+**404 means an older server**, and the panel says so instead of retrying.
 
 `GET /projects` returns
 `[{ id, path, name, exists, is_git_repo, archived_at, session_count,
