@@ -264,6 +264,14 @@ public class UsageActivity extends Activity {
         // the number carries the reading.
         head.addView(Widgets.text(this,
                 window == null ? "—" : window.percentLabel(), Theme.INK, 15, true));
+        // A bare percentage doesn't say which way it runs — 42% could be spent
+        // or left. The unit settles it, and matches a bar that fills as the
+        // quota goes.
+        if (window != null) {
+            TextView unit = Widgets.text(this, "used", Theme.MUTED, 12, false);
+            Widgets.margins(unit, Theme.dp(this, 4), 0, 0, 0);
+            head.addView(unit);
+        }
         block.addView(head);
 
         Meter meter = new Meter(this);
