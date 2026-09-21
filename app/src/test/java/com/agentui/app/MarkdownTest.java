@@ -186,6 +186,135 @@ public class MarkdownTest {
         assertEquals("gone", sub(d, only(d, Markdown.Type.STRIKE)));
     }
 
+    /** The spans of the given type, in order. */
+    private static List<Markdown.Span> all(Markdown.Doc d, Markdown.Type type) {
+        List<Markdown.Span> found = new java.util.ArrayList<>();
+        for (Markdown.Span s : d.spans) {
+            if (s.type == type) found.add(s);
+        }
+        return found;
+    }
+
+    /** Cell texts of the doc's only table, header row first. */
+    private static List<List<String>> cells(Markdown.Table t) {
+        List<List<String>> rows = new java.util.ArrayList<>();
+        for (Markdown.Doc[] row : t.rows) {
+            List<String> texts = new java.util.ArrayList<>();
+            for (Markdown.Doc cell : row) texts.add(cell.text);
+            rows.add(texts);
+        }
+        return rows;
+    }
+
+    private static Markdown.Table onlyTable(Markdown.Doc d) {
+        assertEquals(1, d.tables.size());
+        return d.tables.get(0);
+    }
+
+    private static List<List<String>> rows(String[]... rows) {
+        List<List<String>> out = new java.util.ArrayList<>();
+        for (String[] row : rows) out.add(java.util.Arrays.asList(row));
+        return out;
+    }
+
+    @Test
+    public void pipeTableWithHeaderAndBody() {
+        Markdown.Doc d = parse("| a | b |\n|---|---|\n| 1 | **2** |");
+        assertEquals(String.valueOf(Markdown.TABLE_MARK), d.text);
+        assertEquals(d.text, sub(d, only(d, Markdown.Type.TABLE)));
+        Markdown.Table t = onlyTable(d);
+        assertEquals(rows(new String[] {"a", "b"}, new String[] {"1", "2"}), cells(t));
+        Markdown.Doc bold = t.rows.get(1)[1];
+        assertEquals("2", sub(bold, only(bold, Markdown.Type.BOLD)));
+    }
+
+    @Test
+    public void tableOuterPipesAreOptional() {
+        Markdown.Doc d = parse("a | b\n--- | ---\n1 | 2");
+        assertEquals(rows(new String[] {"a", "b"}, new String[] {"1", "2"}), cells(onlyTable(d)));
+    }
+
+    @Test
+    public void tableDelimiterColonsSetAlignment() {
+        Markdown.Doc d = parse("| a | b | c | d |\n| :-- | :-: | --: | --- |");
+        Markdown.Table t = onlyTable(d);
+        assertEquals(
+                java.util.Arrays.asList(Markdown.Align.LEFT, Markdown.Align.CENTER,
+                        Markdown.Align.RIGHT, Markdown.Align.NONE),
+                t.aligns);
+        assertEquals(rows(new String[] {"a", "b", "c", "d"}), cells(t));
+    }
+
+    @Test
+    public void escapedPipesAndPipesInCodeDoNotSplitCells() {
+        Markdown.Table t = onlyTable(
+                parse("| op | note |\n|---|---|\n| `a || b` | x \\| y |\n| `c \\| d` | z |"));
+        assertEquals(rows(new String[] {"op", "note"},
+                new String[] {"a || b", "x | y"},
+                new String[] {"c | d", "z"}), cells(t));
+        Markdown.Doc code = t.rows.get(1)[0];
+        assertEquals("a || b", sub(code, only(code, Markdown.Type.CODE)));
+        code = t.rows.get(2)[0];
+        assertEquals("c | d", sub(code, only(code, Markdown.Type.CODE)));
+    }
+
+    @Test
+    public void raggedTableRowsArePaddedAndTruncatedToHeader() {
+        Markdown.Table t = onlyTable(parse("| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |\n| | 2 |"));
+        assertEquals(rows(new String[] {"a", "b"},
+                new String[] {"1", ""},
+                new String[] {"1", "2"},
+                new String[] {"", "2"}), cells(t));
+    }
+
+    @Test
+    public void tableNeedsMatchingDelimiterRow() {
+        for (String md : new String[] {"| a | b |\n| 1 | 2 |", "| a | b |\n|---|", "a | b"}) {
+            Markdown.Doc d = parse(md);
+            assertEquals(md, d.text);
+            assertTrue(d.tables.isEmpty());
+            assertTrue(all(d, Markdown.Type.TABLE).isEmpty());
+        }
+    }
+
+    @Test
+    public void tableEndsAtBlankOrPipelessLine() {
+        String mark = String.valueOf(Markdown.TABLE_MARK);
+        Markdown.Doc d = parse("intro\n| a |\n|---|\n| 1 |\nafter");
+        assertEquals("intro\n" + mark + "\nafter", d.text);
+        assertEquals(rows(new String[] {"a"}, new String[] {"1"}), cells(onlyTable(d)));
+
+        d = parse("| a |\n|---|\n\n| 1 |");
+        assertEquals(mark + "\n\n| 1 |", d.text);
+        assertEquals(rows(new String[] {"a"}), cells(onlyTable(d)));
+    }
+
+    @Test
+    public void blocksSplitProseAroundTables() {
+        Markdown.Doc d = parse("**intro**\n\n| a |\n|---|\n| `1` |\n\nafter\n| b |\n|---|");
+        List<Markdown.Block> blocks = Markdown.blocks(d);
+        assertEquals(4, blocks.size());
+
+        Markdown.Doc intro = blocks.get(0).doc;
+        assertNull(blocks.get(0).table);
+        assertEquals("intro", intro.text);
+        assertEquals("intro", sub(intro, only(intro, Markdown.Type.BOLD)));
+
+        assertNull(blocks.get(1).doc);
+        assertEquals(rows(new String[] {"a"}, new String[] {"1"}), cells(blocks.get(1).table));
+
+        assertEquals("after", blocks.get(2).doc.text);
+        assertEquals(rows(new String[] {"b"}), cells(blocks.get(3).table));
+    }
+
+    @Test
+    public void blocksWithoutTablesIsOneProseBlock() {
+        List<Markdown.Block> blocks = Markdown.blocks(parse("one\n\ntwo"));
+        assertEquals(1, blocks.size());
+        assertEquals("one\n\ntwo", blocks.get(0).doc.text);
+        assertTrue(Markdown.blocks(parse("")).isEmpty());
+    }
+
     @Test
     public void nullInputIsEmpty() {
         Markdown.Doc d = parse(null);

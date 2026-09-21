@@ -11,6 +11,13 @@ import android.text.style.StrikethroughSpan;
 import android.text.style.StyleSpan;
 import android.text.style.TypefaceSpan;
 import android.text.style.UnderlineSpan;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.TableLayout;
+import android.widget.TableRow;
+import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,19 +25,28 @@ import java.util.List;
 /**
  * A deliberately small Markdown subset for agent messages: headings, bold,
  * italic, strikethrough, inline code, fenced code blocks, bullet/numbered
- * lists and links.
+ * lists, links and pipe tables.
+ *
+ * <p>Tables are parsed into {@link Table}s of per-cell docs; {@link #renderInto}
+ * shows each as a grid of cell views in its own sideways-scrolling box.
  *
  * <p>{@link #parse} is pure (no Android types) so it can be unit-tested on the
  * plain JVM, mirroring {@link LineDiff}. It strips the markers and emits the
  * visible text plus a list of {@link Span}s describing what to style where —
  * the visible text is what the platform copies when you select it, so a
- * selection yields clean prose. {@link #render} turns that into a styled
- * {@link CharSequence}; the raw source is kept elsewhere for the "Copy" button.
+ * selection yields clean prose. {@link #renderInto} turns that into styled
+ * views; the raw source is kept elsewhere for the "Copy" button.
  */
 final class Markdown {
     private Markdown() {}
 
-    enum Type { BOLD, ITALIC, STRIKE, CODE, CODE_BLOCK, HEADING, LINK }
+    enum Type { BOLD, ITALIC, STRIKE, CODE, CODE_BLOCK, HEADING, LINK, TABLE }
+
+    /** Stands in for a table in {@link Doc#text}; a TABLE span covers it. */
+    static final char TABLE_MARK = '￼';
+
+    /** Column alignment from a table delimiter row. */
+    enum Align { NONE, LEFT, CENTER, RIGHT }
 
     /** A styling instruction over [start, end) of the parsed text. */
     static final class Span {
@@ -49,14 +65,35 @@ final class Markdown {
         }
     }
 
-    /** The visible text with the markers removed, plus the spans over it. */
+    /**
+     * The visible text with the markers removed, plus the spans over it. Each
+     * table is a single {@link #TABLE_MARK} in the text; the TABLE spans, in
+     * order, correspond to {@link #tables}.
+     */
     static final class Doc {
         final String text;
         final List<Span> spans;
+        final List<Table> tables;
 
         Doc(String text, List<Span> spans) {
+            this(text, spans, new ArrayList<>());
+        }
+
+        Doc(String text, List<Span> spans, List<Table> tables) {
             this.text = text;
             this.spans = spans;
+            this.tables = tables;
+        }
+    }
+
+    /** A parsed table: per-column alignments and rows of parsed cells. */
+    static final class Table {
+        final List<Align> aligns;
+        final List<Doc[]> rows; // the header first; each row has aligns.size() cells
+
+        Table(List<Align> aligns, List<Doc[]> rows) {
+            this.aligns = aligns;
+            this.rows = rows;
         }
     }
 
@@ -67,6 +104,7 @@ final class Markdown {
     static Doc parse(String md) {
         StringBuilder out = new StringBuilder();
         List<Span> spans = new ArrayList<>();
+        List<Table> tables = new ArrayList<>();
         if (md == null) md = "";
         String[] lines = md.split("\n", -1);
 
@@ -111,6 +149,26 @@ final class Markdown {
                 continue;
             }
 
+            // table: a piped header row directly followed by a delimiter row with
+            // the same number of columns. Body rows run until a blank or pipeless line.
+            List<String> header = trimmed.indexOf('|') >= 0 ? splitRow(trimmed) : null;
+            List<Align> aligns = header != null && i + 1 < lines.length
+                    ? delimiterRow(lines[i + 1]) : null;
+            if (aligns != null && aligns.size() == header.size()) {
+                List<List<String>> rows = new ArrayList<>();
+                rows.add(header);
+                int j = i + 2;
+                while (j < lines.length && lines[j].indexOf('|') >= 0 && !lines[j].trim().isEmpty()) {
+                    rows.add(splitRow(lines[j].trim()));
+                    j++;
+                }
+                tables.add(table(rows, aligns));
+                spans.add(new Span(out.length(), out.length() + 1, Type.TABLE, 0, null));
+                out.append(TABLE_MARK);
+                i = j;
+                continue;
+            }
+
             // bullet list: -, * or + followed by a space
             if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
                 out.append("•  ");
@@ -135,7 +193,7 @@ final class Markdown {
             i++;
         }
 
-        return new Doc(out.toString(), spans);
+        return new Doc(out.toString(), spans, tables);
     }
 
     /** Return the leading backtick count when it forms a fence. */
@@ -151,6 +209,146 @@ final class Markdown {
         while (end < value.length() && value.charAt(end) == '`') end++;
         return end;
     }
+
+    /**
+     * Split a trimmed table row into raw cell texts. Leading and trailing pipes
+     * are optional. {@code \|} is a literal pipe; unlike GFM, pipes inside a
+     * closed code span do not split either, since agents rarely escape them there.
+     */
+    static List<String> splitRow(String row) {
+        String s = row.startsWith("|") ? row.substring(1) : row;
+        List<String> cells = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean endedOnPipe = false;
+
+        int i = 0;
+        while (i < s.length()) {
+            char c = s.charAt(i);
+            endedOnPipe = false;
+            if (c == '\\' && i + 1 < s.length() && s.charAt(i + 1) == '|') {
+                cur.append('|');
+                i += 2;
+            } else if (c == '`') {
+                int runEnd = backtickRunEnd(s, i);
+                int run = runEnd - i;
+                int close = findRun(s, run, runEnd);
+                int end = close < 0 ? runEnd : close + run;
+                cur.append(s.substring(i, end).replace("\\|", "|"));
+                i = end;
+            } else if (c == '|') {
+                cells.add(cur.toString().trim());
+                cur.setLength(0);
+                endedOnPipe = true;
+                i++;
+            } else {
+                cur.append(c);
+                i++;
+            }
+        }
+
+        if (!endedOnPipe) cells.add(cur.toString().trim());
+        return cells;
+    }
+
+    /** Index of a backtick run of exactly {@code run} ticks at or after {@code from}, or -1. */
+    private static int findRun(String s, int run, int from) {
+        int search = from;
+        while (search < s.length()) {
+            int start = s.indexOf('`', search);
+            if (start < 0) return -1;
+            int end = backtickRunEnd(s, start);
+            if (end - start == run) return start;
+            search = end;
+        }
+        return -1;
+    }
+
+    /**
+     * Parse a table delimiter row such as {@code | :--- | :-: | --: |} into
+     * per-column alignments, or null if it is not one.
+     */
+    static List<Align> delimiterRow(String line) {
+        String trimmed = line.trim();
+        if (trimmed.indexOf('|') < 0) return null;
+        List<Align> aligns = new ArrayList<>();
+        for (String c : splitRow(trimmed)) {
+            if (!c.matches(":?-+:?")) return null;
+            boolean left = c.startsWith(":");
+            boolean right = c.endsWith(":");
+            if (left && right) aligns.add(Align.CENTER);
+            else if (right) aligns.add(Align.RIGHT);
+            else aligns.add(left ? Align.LEFT : Align.NONE);
+        }
+        return aligns;
+    }
+
+    /**
+     * Parse each raw cell's inline markup. Ragged rows are padded and truncated
+     * to the header's column count.
+     */
+    private static Table table(List<List<String>> rows, List<Align> aligns) {
+        int cols = aligns.size();
+        List<Doc[]> cells = new ArrayList<>();
+        for (List<String> row : rows) {
+            Doc[] parsed = new Doc[cols];
+            for (int c = 0; c < cols; c++) {
+                StringBuilder text = new StringBuilder();
+                List<Span> cellSpans = new ArrayList<>();
+                if (c < row.size()) inline(row.get(c), text, cellSpans);
+                parsed[c] = new Doc(text.toString(), cellSpans);
+            }
+            cells.add(parsed);
+        }
+        return new Table(aligns, cells);
+    }
+
+    /** A run of the document shown in its own view: prose, or one table. */
+    static final class Block {
+        final Doc doc;     // prose; null for a table
+        final Table table; // null for prose
+
+        Block(Doc doc, Table table) {
+            this.doc = doc;
+            this.table = table;
+        }
+    }
+
+    /**
+     * Split a parsed doc at its tables. Prose blocks drop the newlines at their
+     * edges, since the views they land in are spaced apart already; prose that
+     * is only newlines is dropped entirely.
+     */
+    static List<Block> blocks(Doc doc) {
+        List<Block> out = new ArrayList<>();
+        int pos = 0;
+        int t = 0;
+        for (Span s : doc.spans) {
+            if (s.type != Type.TABLE) continue;
+            prose(doc, pos, s.start, out);
+            out.add(new Block(null, doc.tables.get(t++)));
+            pos = s.end;
+        }
+        prose(doc, pos, doc.text.length(), out);
+        return out;
+    }
+
+    private static void prose(Doc doc, int start, int end, List<Block> out) {
+        while (start < end && doc.text.charAt(start) == '\n') start++;
+        while (end > start && doc.text.charAt(end - 1) == '\n') end--;
+        if (start < end) out.add(new Block(slice(doc, start, end), null));
+    }
+
+    /** The text in [start, end) with the spans inside it, rebased to 0. */
+    private static Doc slice(Doc doc, int start, int end) {
+        List<Span> spans = new ArrayList<>();
+        for (Span s : doc.spans) {
+            int st = Math.max(s.start, start);
+            int en = Math.min(s.end, end);
+            if (st < en) spans.add(new Span(st - start, en - start, s.type, s.level, s.href));
+        }
+        return new Doc(doc.text.substring(start, end), spans);
+    }
+
 
     private static boolean isAllSpaces(String value) {
         for (int i = 0; i < value.length(); i++) {
@@ -252,8 +450,122 @@ final class Markdown {
     // larger text for higher-level headings
     private static final float[] HEADING_SCALE = {1.5f, 1.3f, 1.15f, 1.08f, 1.0f, 1.0f};
 
-    static CharSequence render(Context ctx, String md, int baseColor) {
-        Doc doc = parse(md);
+    /**
+     * Render {@code md} into {@code box} (a vertical {@link LinearLayout}): prose
+     * in selectable text views, each table as a grid of cell views in its own
+     * sideways-scrolling box. Existing views are reused while their kind still
+     * matches, so re-rendering as chunks stream in keeps a table's scroll offset.
+     */
+    static void renderInto(LinearLayout box, String md) {
+        Context ctx = box.getContext();
+        List<Block> blocks = blocks(parse(md));
+        for (int b = 0; b < blocks.size(); b++) {
+            Block block = blocks.get(b);
+            boolean isTable = block.table != null;
+            View view = b < box.getChildCount() ? box.getChildAt(b) : null;
+            if (view == null || (view instanceof HorizontalScrollView) != isTable) {
+                if (view != null) box.removeViewAt(b);
+                view = isTable ? tableView(ctx) : proseView(ctx);
+                box.addView(view, b);
+            }
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) view.getLayoutParams();
+            int top = b > 0 ? Theme.dp(ctx, 8) : 0;
+            if (lp.topMargin != top) {
+                lp.topMargin = top;
+                view.setLayoutParams(lp);
+            }
+            if (isTable) {
+                bindTable((TableLayout) ((HorizontalScrollView) view).getChildAt(0), block.table);
+            } else {
+                ((TextView) view).setText(style(block.doc));
+            }
+        }
+        while (box.getChildCount() > blocks.size()) box.removeViewAt(box.getChildCount() - 1);
+    }
+
+    private static TextView proseView(Context ctx) {
+        TextView t = Widgets.text(ctx, "", Theme.INK, 15, false);
+        t.setTextIsSelectable(true);
+        t.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        return t;
+    }
+
+    /**
+     * A box that scrolls a table sideways. It wraps its content but, as a
+     * WRAP_CONTENT child of the message column, is capped at the column's width;
+     * only the grid inside is measured unbounded.
+     *
+     * <p>The grid draws its borders by painting the line colour behind cells
+     * that are inset 1px from each other: the grid pads its top and left edges,
+     * each cell margins its right and bottom.
+     */
+    private static HorizontalScrollView tableView(Context ctx) {
+        HorizontalScrollView scroll = new HorizontalScrollView(ctx);
+        TableLayout grid = new TableLayout(ctx);
+        grid.setBackgroundColor(Theme.LINE);
+        int line = hairline(ctx);
+        grid.setPadding(line, line, 0, 0);
+        scroll.addView(grid, new HorizontalScrollView.LayoutParams(
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT,
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT));
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        return scroll;
+    }
+
+    /** Fill {@code grid} from {@code table}, reusing rows whose column count still fits. */
+    private static void bindTable(TableLayout grid, Table table) {
+        Context ctx = grid.getContext();
+        int cols = table.aligns.size();
+        for (int r = 0; r < table.rows.size(); r++) {
+            TableRow row = r < grid.getChildCount() ? (TableRow) grid.getChildAt(r) : null;
+            if (row == null || row.getChildCount() != cols) {
+                if (row != null) grid.removeViewAt(r);
+                row = new TableRow(ctx);
+                for (int c = 0; c < cols; c++) row.addView(cellView(ctx, r == 0));
+                grid.addView(row, r);
+            }
+            Doc[] cells = table.rows.get(r);
+            for (int c = 0; c < cols; c++) {
+                TextView cell = (TextView) row.getChildAt(c);
+                cell.setText(style(cells[c]));
+                cell.setGravity(Gravity.CENTER_VERTICAL | gravity(table.aligns.get(c)));
+            }
+        }
+        while (grid.getChildCount() > table.rows.size()) grid.removeViewAt(grid.getChildCount() - 1);
+    }
+
+    private static TextView cellView(Context ctx, boolean header) {
+        TextView t = Widgets.text(ctx, "", Theme.INK, 14, header);
+        t.setTextIsSelectable(true);
+        t.setBackgroundColor(header ? Theme.PANEL_HOVER : Theme.PANEL);
+        // long cells wrap inside their column instead of stretching the table
+        t.setMaxWidth(Theme.dp(ctx, 280));
+        int h = Theme.dp(ctx, 10);
+        int v = Theme.dp(ctx, 6);
+        t.setPadding(h, v, h, v);
+        TableRow.LayoutParams lp = new TableRow.LayoutParams(
+                TableRow.LayoutParams.WRAP_CONTENT, TableRow.LayoutParams.MATCH_PARENT);
+        int line = hairline(ctx);
+        lp.setMargins(0, 0, line, line);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    private static int gravity(Align align) {
+        switch (align) {
+            case CENTER: return Gravity.CENTER_HORIZONTAL;
+            case RIGHT: return Gravity.END;
+            default: return Gravity.START;
+        }
+    }
+
+    private static int hairline(Context ctx) {
+        return Math.max(1, Theme.dp(ctx, 1));
+    }
+
+    private static CharSequence style(Doc doc) {
         SpannableStringBuilder sb = new SpannableStringBuilder(doc.text);
         int len = sb.length();
         for (Span s : doc.spans) {
@@ -289,6 +601,9 @@ final class Markdown {
                     span(sb, new ForegroundColorSpan(Theme.INFO), st, en);
                     span(sb, new UnderlineSpan(), st, en);
                     break;
+                case TABLE:
+                    break; // rendered as its own view, see renderInto
+
             }
         }
         return sb;

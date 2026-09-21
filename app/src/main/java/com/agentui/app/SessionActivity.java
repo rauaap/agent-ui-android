@@ -144,7 +144,7 @@ public class SessionActivity extends Activity {
     private final ExecutorService completionExecutor = Executors.newSingleThreadExecutor();
 
     // transcript state
-    private TextView agentBubble;     // coalesce consecutive output chunks
+    private LinearLayout agentBubble; // coalesce consecutive output chunks
     private StringBuilder agentRaw;   // raw markdown backing the current bubble
     private View pendingApprovalCard;
     private String pendingApprovalId;
@@ -1493,7 +1493,7 @@ public class SessionActivity extends Activity {
         if (agentBubble != null) {
             if (agentRaw == null) agentRaw = new StringBuilder();
             agentRaw.append(text);
-            agentBubble.setText(Markdown.render(this, agentRaw.toString(), Theme.INK));
+            Markdown.renderInto(agentBubble, agentRaw.toString());
             return;
         }
         // The raw markdown is kept verbatim: the bubble shows the rendered form,
@@ -1519,9 +1519,8 @@ public class SessionActivity extends Activity {
         labelRow.addView(copyBtn);
         wrap.addView(labelRow);
 
-        TextView bubble = Widgets.text(this, "", Theme.INK, 15, false);
-        bubble.setText(Markdown.render(this, raw.toString(), Theme.INK));
-        bubble.setTextIsSelectable(true);
+        LinearLayout bubble = Widgets.column(this);
+        Markdown.renderInto(bubble, raw.toString());
         bubble.setBackground(Theme.rounded(this, Theme.PANEL, 16, Theme.LINE, 1));
         int p = Theme.dp(this, 12);
         bubble.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
@@ -1830,6 +1829,14 @@ public class SessionActivity extends Activity {
         toolView.setPadding(tp, Theme.dp(this, 2), tp, Theme.dp(this, 2));
         head.addView(tag);
         head.addView(toolView);
+        if ("write".equals(action.kind()) || "edit".equals(action.kind())) {
+            TextView path = Widgets.mono(this, action.summary(), Theme.MUTED, 12.5f);
+            path.setMaxLines(1);
+            path.setEllipsize(android.text.TextUtils.TruncateAt.START);
+            LinearLayout.LayoutParams pathLp = lp(0, WRAP, 1f);
+            pathLp.leftMargin = Theme.dp(this, 8);
+            head.addView(path, pathLp);
+        }
         {
             TextView copy = copyChip(action.command());
             if (copy != null) {
