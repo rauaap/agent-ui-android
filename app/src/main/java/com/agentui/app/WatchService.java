@@ -17,7 +17,6 @@ import org.json.JSONObject;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -93,9 +92,8 @@ public class WatchService extends Service {
     public void onCreate() {
         super.onCreate();
         prefs = new Prefs(this);
-        http = new OkHttpClient.Builder()
-                .pingInterval(20, TimeUnit.SECONDS)
-                .build();
+        http = Auth.client(this);
+        Auth.whenReady(resumeAuth);
         createChannels();
     }
 
@@ -123,6 +121,7 @@ public class WatchService extends Service {
 
     @Override
     public void onDestroy() {
+        Auth.forget(resumeAuth);
         for (Watch w : watches.values()) {
             w.closing = true;
             if (w.socket != null) w.socket.close(1000, null);
@@ -162,7 +161,14 @@ public class WatchService extends Service {
         updateOngoing();
     }
 
+    private final Runnable resumeAuth = () -> {
+        for (java.util.Map.Entry<String, Watch> entry : watches.entrySet()) {
+            if (entry.getValue().socket == null) connect(entry.getKey(), entry.getValue());
+        }
+    };
+
     private void connect(String id, Watch w) {
+        if (!Auth.ready()) return;
         w.closing = false;
         Request req = new Request.Builder()
                 .url(prefs.wsBase() + "/ws/sessions/" + id)

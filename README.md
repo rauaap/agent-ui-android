@@ -8,6 +8,32 @@ The build is fully containerized and CLI-driven — no JDK, Android SDK, or Grad
 needed on the host. The only host dependency is `podman` (and `adb`, if you want
 to install on a device).
 
+## Server authentication
+
+On first launch, Settings asks for the server address and **Server token**.
+Copy the token from `~/.config/agent-ui-server/token` on the server. The field
+supports paste and show/hide; surrounding whitespace is removed on save.
+Saving checks `GET /agents`: a rejected token is not saved, and **Save anyway**
+is offered only when the server cannot be reached.
+
+The token is stored in app-private preferences excluded from cloud backup and
+device transfer. REST and WebSocket handshakes use an Authorization header,
+never a URL parameter. Redirects are not followed. If the server rotates its
+token, Settings reopens and reconnect attempts pause until a replacement is
+saved. The previous token remains stored until then. Install this client and
+enter the token before enabling server authentication.
+
+Device smoke checks before release:
+- Fresh install: Settings opens without any API traffic.
+- Correct token: projects, usage, sandbox paths, session and file sockets work.
+- Wrong token: “Token rejected”; existing preferences remain unchanged.
+- Offline save: only network errors offer “Save anyway”.
+- Rotate the server token, including while watching a session in the background:
+  Settings opens on return; no reconnect traffic continues until replacement.
+- Restart the server: both sockets and background watches reconnect.
+- Restore a backup or transfer devices: the token must be entered again.
+- Check device logs for credentials; tokens must never appear there.
+
 ## Features
 
 - **Project list** — the launcher screen. A project is a working directory,

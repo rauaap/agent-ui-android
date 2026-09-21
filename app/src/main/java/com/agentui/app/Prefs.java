@@ -24,10 +24,15 @@ final class Prefs {
     private static final String DEFAULT_DIR = "/projects/";
 
     private final SharedPreferences sp;
+    private final SharedPreferences secrets;
 
     Prefs(Context ctx) {
         sp = ctx.getApplicationContext().getSharedPreferences(FILE, Context.MODE_PRIVATE);
+        secrets = ctx.getApplicationContext().getSharedPreferences("server_secret", Context.MODE_PRIVATE);
     }
+
+    String token() { return secrets.getString("token", ""); }
+    void saveToken(String token) { secrets.edit().putString("token", token.trim()).apply(); }
 
     String host() { return sp.getString(KEY_HOST, ""); }
     int port() { return sp.getInt(KEY_PORT, 8080); }

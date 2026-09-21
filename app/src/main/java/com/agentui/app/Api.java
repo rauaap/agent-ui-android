@@ -10,7 +10,6 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -93,11 +92,7 @@ final class Api {
 
     Api(Context ctx) {
         this.prefs = new Prefs(ctx);
-        this.client = new OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(20, TimeUnit.SECONDS)
-                .pingInterval(20, TimeUnit.SECONDS)
-                .build();
+        this.client = Auth.client(ctx);
     }
 
     OkHttpClient http() { return client; }
@@ -486,6 +481,7 @@ final class Api {
     private void post(Runnable r) { main.post(r); }
 
     private static String serverError(int code, String body) {
+        if (code == 401) return "The server rejected the token. It may have been changed on the server.";
         try {
             JSONObject o = new JSONObject(body);
             // The app's own errors put a sentence in `detail`. FastAPI's

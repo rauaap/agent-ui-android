@@ -31,6 +31,8 @@ public class SettingsActivity extends Activity {
 
     private Prefs prefs;
     private EditText hostField;
+    private EditText tokenField;
+    private boolean validating;
     private EditText portField;
     private Switch tlsSwitch;
     private EditText defaultDirField;
@@ -117,6 +119,25 @@ public class SettingsActivity extends Activity {
         tlsSwitch.setChecked(prefs.tls());
         tlsRow.addView(tlsSwitch);
         form.addView(tlsRow);
+
+        form.addView(spacer(16));
+        form.addView(label("Server token"));
+        tokenField = field(prefs.token(), "Paste server token",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD, true);
+        tokenField.setSaveEnabled(false);
+        tokenField.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        form.addView(tokenField);
+        Switch showToken = new Switch(this);
+        showToken.setText("Show token");
+        showToken.setOnCheckedChangeListener((button, checked) -> {
+            tokenField.setTransformationMethod(checked ? null
+                    : android.text.method.PasswordTransformationMethod.getInstance());
+            tokenField.setSelection(tokenField.length());
+        });
+        form.addView(showToken);
+        form.addView(Widgets.text(this, Auth.rejected()
+                ? "The server rejected the token. It may have been changed on the server."
+                : "Enter the shared token from your server to connect.", Theme.MUTED, 13, false));
 
         form.addView(spacer(20));
         preview = Widgets.mono(this, "", Theme.MUTED, 13);
@@ -308,10 +329,43 @@ public class SettingsActivity extends Activity {
             toast("Enter a valid port (1–65535)");
             return;
         }
-        prefs.save(host, port, tlsSwitch.isChecked(), defaultDirField.getText().toString(),
-                defaultAgentId, templateField.getText().toString());
-        toast("Saved");
-        finish();
+        if (validating) return;
+        String token = tokenField.getText().toString().trim();
+        if (token.isEmpty()) { toast("Server token is required"); return; }
+        boolean tls = tlsSwitch.isChecked();
+        String base = (tls ? "https://" : "http://") + host + ":" + port;
+        String directory = defaultDirField.getText().toString();
+        String agent = defaultAgentId;
+        String template = templateField.getText().toString();
+        Runnable persist = () -> {
+            prefs.save(host, port, tls, directory, agent, template);
+            prefs.saveToken(token);
+            Auth.saved();
+            toast("Saved");
+            finish();
+        };
+        validating = true;
+        toast("Checking token…");
+        new Thread(() -> {
+            int result;
+            try { result = Auth.check(base, token); }
+            catch (java.io.IOException e) { result = -1; }
+            catch (IllegalArgumentException e) { result = -2; }
+            final int code = result;
+            runOnUiThread(() -> {
+                validating = false;
+                if (isFinishing() || isDestroyed()) return;
+                if (code == 200) persist.run();
+                else if (code == 401) toast("Token rejected");
+                else if (code == -1) new AlertDialog.Builder(this)
+                        .setTitle("Unable to reach server")
+                        .setMessage("Check the server address and network connection.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Save anyway", (dialog, which) -> persist.run()).show();
+                else toast(code == -2 ? "Invalid server address or token format"
+                        : "Server error " + code);
+            });
+        }, "token-validation").start();
     }
 
     /** Refresh the chooser from the configured server; fallback stays usable offline. */

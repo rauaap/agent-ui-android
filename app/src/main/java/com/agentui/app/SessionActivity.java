@@ -300,6 +300,7 @@ public class SessionActivity extends Activity {
     @Override
     protected void onDestroy() {
         active = false;
+        Auth.forget(resumeAuth);
         SessionState.get(api, sessionId).connection(false);
         cancelReconnect();
         cancelFileReconnect();
@@ -942,6 +943,8 @@ public class SessionActivity extends Activity {
 
     private void connectFileSocket() {
         cancelFileReconnect();
+        Auth.whenReady(resumeAuth);
+        if (!Auth.ready()) { authPaused = true; return; }
         if (!fileSocketWanted || fileSocket != null || sessionId == null
                 || sessionId.isEmpty() || workingDir.isEmpty()) return;
         fileErrorTerminal = false;
@@ -1219,8 +1222,20 @@ public class SessionActivity extends Activity {
     /* websocket                                                        */
     /* ---------------------------------------------------------------- */
 
+    private boolean authPaused;
+    private final Runnable resumeAuth = () -> {
+        if (authPaused) {
+            authPaused = false;
+            if (socket != null) { socket.cancel(); socket = null; }
+            connect();
+            if (fileSocketWanted) connectFileSocket();
+        }
+    };
+
     private void connect() {
         cancelReconnect();
+        Auth.whenReady(resumeAuth);
+        if (!Auth.ready()) { authPaused = true; return; }
         if (!active || sessionId == null) return;
 
         // Every connection begins with a complete transcript replay. Rebuild
