@@ -183,6 +183,7 @@ public class SessionActivity extends Activity {
     // eligible approval carrying this exact opaque call ID may replace it.
     private View lastToolCard;
     private String lastToolCallId;
+    private CanonicalAction lastToolAction;
     // The bash card still waiting for its output. A command runs alongside the
     // agent, so its result can arrive several messages after the echo that
     // opened the card — the card is rebuilt in place rather than appended.
@@ -1831,6 +1832,7 @@ public class SessionActivity extends Activity {
 
         lastToolCard = wrap;
         lastToolCallId = callId;
+        lastToolAction = action;
     }
 
     private void addUnsupportedToolEvent(JSONObject event, boolean legacy) {
@@ -1851,6 +1853,7 @@ public class SessionActivity extends Activity {
     private void clearLastTool() {
         lastToolCard = null;
         lastToolCallId = null;
+        lastToolAction = null;
     }
 
     /* ---------------------------------------------------------------- */
@@ -2019,7 +2022,10 @@ public class SessionActivity extends Activity {
 
         // Replace only the immediately eligible call with the exact same opaque
         // invocation ID. The approval's repeated action renders independently.
-        if (lastToolCard != null && callId.equals(lastToolCallId)) {
+        // A session tool called by Claude is the exception: its approval gets a
+        // server-minted call ID, so it is matched on tool and arguments instead.
+        if (lastToolCard != null && (callId.equals(lastToolCallId)
+                || InterAgent.sameCall(lastToolAction, action))) {
             transcript.removeView(lastToolCard);
         }
         clearLastTool();
