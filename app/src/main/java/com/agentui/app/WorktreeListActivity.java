@@ -204,12 +204,16 @@ public class WorktreeListActivity extends Activity {
 
         // "created on <branch>", not "on <branch>": the branch is where the
         // worktree started, and an agent working in it can have moved since.
+        // The id closes the meta line; tapping it copies it for an agent's
+        // start_session call.
         String subtitle = w.subtitle();
+        LinearLayout metaRow = Widgets.row(this);
         if (!subtitle.isEmpty()) {
-            TextView meta = Widgets.text(this, subtitle, Theme.MUTED, 12.5f, false);
-            Widgets.margins(meta, 0, Theme.dp(this, 8), 0, 0);
-            card.addView(meta);
+            metaRow.addView(Widgets.text(this, subtitle + "  ·  ", Theme.MUTED, 12.5f, false));
         }
+        metaRow.addView(Widgets.idLabel(this, w.id, "Worktree", 12.5f));
+        Widgets.margins(metaRow, 0, Theme.dp(this, 8), 0, 0);
+        card.addView(metaRow);
 
         if (!w.exists) {
             TextView gone = Widgets.text(this,

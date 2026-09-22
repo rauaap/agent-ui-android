@@ -269,6 +269,14 @@ public class SessionSettingsActivity extends Activity {
         save.setOnClickListener(v -> rename(save));
         form.addView(save);
 
+        // Read-only ids, for handing to another agent's session tools.
+        form.addView(spacer(16));
+        form.addView(idRow("Session ID", sessionId, "Session"));
+        if (!worktreeId.isEmpty() && !"legacy".equals(worktreeId)) {
+            form.addView(spacer(6));
+            form.addView(idRow("Worktree ID", worktreeId, "Worktree"));
+        }
+
         // ---- archive ----
         form.addView(spacer(28));
         form.addView(section("Archive"));
@@ -571,6 +579,23 @@ public class SessionSettingsActivity extends Activity {
         TextView t = Widgets.text(this, s, Theme.MUTED, 13, true);
         Widgets.margins(t, 0, 0, 0, Theme.dp(this, 7));
         return t;
+    }
+
+    /** {@code Session ID   42   Copy}: a label, the bare id, and a copy action. */
+    private View idRow(String label, String id, String what) {
+        LinearLayout row = Widgets.row(this);
+        TextView name = Widgets.text(this, label, Theme.MUTED, 13, true);
+        name.setLayoutParams(lp(Theme.dp(this, 96), WRAP));
+        row.addView(name);
+        TextView value = Widgets.mono(this, id == null ? "" : id, Theme.INK, 14);
+        value.setTextIsSelectable(true);
+        value.setLayoutParams(lp(0, WRAP, 1f));
+        row.addView(value);
+        TextView copy = Widgets.ghostButton(this, "Copy");
+        copy.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        copy.setOnClickListener(v -> Widgets.copyId(this, id, what));
+        row.addView(copy);
+        return row;
     }
 
     private View spacer(int dp) {

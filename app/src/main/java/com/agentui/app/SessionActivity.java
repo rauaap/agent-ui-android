@@ -63,12 +63,39 @@ public class SessionActivity extends Activity {
 
     private static final int REQ_SETTINGS = 2;
 
+    /**
+     * Open {@code s}. A null {@code projectDir} is fine: the screen looks the
+     * project up itself, which is how a sender in another project is opened.
+     */
+    static Intent intent(android.content.Context ctx, Session s, String projectDir) {
+        Intent i = new Intent(ctx, SessionActivity.class);
+        i.putExtra(EXTRA_ID, s.id);
+        i.putExtra(EXTRA_NAME, s.name);
+        i.putExtra(EXTRA_AGENT, s.agent);
+        i.putExtra(EXTRA_DIR, s.workingDir);
+        i.putExtra(EXTRA_PROJECT_DIR, projectDir);
+        i.putExtra(EXTRA_WORKTREE_ID, s.worktreeId);
+        i.putExtra(EXTRA_STATUS, s.status);
+        i.putExtra(EXTRA_AUTO_WRITE, s.autoApproveWrite);
+        i.putExtra(EXTRA_AUTO_COMMAND, s.autoApproveCommand);
+        i.putExtra(EXTRA_ARCHIVED, s.isArchived());
+        return i;
+    }
+
     private Api api;
     private String sessionId;
     private String sessionName;
     private String sessionAgent = "";
     private final List<Agent> agents = new ArrayList<>(Agent.FALLBACK);
     private final List<TextView> agentLabelViews = new ArrayList<>();
+    /**
+     * Every session on the server, in any project, by id: other agents can
+     * message this one from anywhere. Refreshed with this session's metadata,
+     * and null until the first load so senders aren't called unavailable early.
+     */
+    private java.util.Map<String, Session> directory;
+    /** Rows that show another session's name, redrawn when {@link #directory} changes. */
+    private final List<Runnable> directoryViews = new ArrayList<>();
     private String status = "idle";
     private String workingDir;
     private String projectId = "";
@@ -236,6 +263,9 @@ public class SessionActivity extends Activity {
         if (sessionId == null || sessionId.isEmpty()) return;
         api.listSessions(new Api.Cb<java.util.List<Session>>() {
             @Override public void onResult(java.util.List<Session> sessions) {
+                directory = new java.util.HashMap<>();
+                for (Session session : sessions) directory.put(session.id, session);
+                for (Runnable view : directoryViews) view.run();
                 for (Session session : sessions) {
                     if (!session.id.equals(sessionId)) continue;
                     sessionName = session.name;
@@ -344,13 +374,26 @@ public class SessionActivity extends Activity {
         nameView = Widgets.text(this, name == null ? "" : name, Theme.INK, 17, true);
         nameView.setMaxLines(1);
         nameView.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        headings.addView(nameView);
+        // Wrap-width row with a weighted name: the id sits right after a short
+        // name, and a long one shrinks (ellipsized) rather than pushing it off.
+        LinearLayout nameRow = Widgets.row(this);
+        nameRow.setGravity(Gravity.BOTTOM);
+        nameView.setLayoutParams(lp(WRAP, WRAP, 1f));
+        nameRow.addView(nameView);
+        if (sessionId != null) {
+            TextView idView = Widgets.idLabel(this, sessionId, "Session", 12);
+            Widgets.margins(idView, Theme.dp(this, 8), 0, 0, Theme.dp(this, 2));
+            nameRow.addView(idView);
+        }
+        headings.addView(nameRow, lp(WRAP, WRAP));
         // The effective cwd remains the former worktree path after an explicit
         // detach; worktree_id null must not make that look like the project root.
         locationHolder = Widgets.row(this);
         renderLocation();
+        // Wrap width for the same reason as the name row: the worktree id
+        // follows the path rather than the far edge.
+        headings.addView(locationHolder, lp(WRAP, WRAP));
         Widgets.margins(locationHolder, 0, Theme.dp(this, 2), 0, 0);
-        headings.addView(locationHolder);
         header.addView(headings);
 
         ImageView gearBtn = new ImageView(this);
@@ -770,8 +813,13 @@ public class SessionActivity extends Activity {
         TextView dirView = Widgets.mono(this, workingDir, Theme.FAINT, 12);
         dirView.setMaxLines(1);
         dirView.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        dirView.setLayoutParams(lp(0, WRAP, 1f));
+        dirView.setLayoutParams(lp(WRAP, WRAP, 1f));
         locationHolder.addView(dirView);
+        if (!worktreeId.isEmpty() && !"legacy".equals(worktreeId)) {
+            TextView idView = Widgets.idLabel(this, worktreeId, "Worktree", 12);
+            Widgets.margins(idView, Theme.dp(this, 8), 0, 0, 0);
+            locationHolder.addView(idView);
+        }
     }
 
     /* ---------------------------------------------------------------- */
@@ -1266,6 +1314,8 @@ public class SessionActivity extends Activity {
             pendingBashCard = null;
             pendingBashCommand = null;
             clearLastTool();
+            // The replay redraws every sender row; the old ones are discarded.
+            directoryViews.clear();
         }
 
         String url = api.prefs().wsBase() + "/ws/sessions/" + sessionId;
@@ -1395,8 +1445,15 @@ public class SessionActivity extends Activity {
                 agentBubble = null;
                 clearLastTool();
                 String prompt = msg.optString("text", "");
-                acceptHistoryEcho(MessageHistory.promptEntry(prompt));
-                addUserMessage(prompt);
+                InterAgent.Source source = InterAgent.source(msg);
+                if (source.isUser()) {
+                    acceptHistoryEcho(MessageHistory.promptEntry(prompt));
+                    addUserMessage(prompt);
+                } else {
+                    // Another agent's words: kept out of composer history,
+                    // which only recalls what the user typed.
+                    addAgentMessage(prompt, source);
+                }
                 break;
             case "output":
                 clearLastTool();
@@ -1503,6 +1560,138 @@ public class SessionActivity extends Activity {
         append(wrap);
     }
 
+    /**
+     * An input sent by another agent: full width on the left, blue where the
+     * user's bubble is orange, and headed by who sent it. Plain text like the
+     * user bubble — it is input, not this agent's Markdown output.
+     */
+    private void addAgentMessage(String text, InterAgent.Source source) {
+        LinearLayout content = Widgets.column(this);
+
+        LinearLayout head = Widgets.row(this);
+        // The sender row wraps inside a weighted column, so a long name shrinks
+        // while its id and tag stay right beside it rather than at the far edge.
+        LinearLayout senderSlot = Widgets.column(this);
+        LinearLayout sender = Widgets.row(this);
+        senderSlot.addView(sender, lp(WRAP, WRAP));
+        head.addView(senderSlot, lp(0, WRAP, 1f));
+        TextView copyBtn = Widgets.text(this, "COPY", Theme.FAINT, 11, true);
+        copyBtn.setLetterSpacing(0.06f);
+        int cbp = Theme.dp(this, 6);
+        copyBtn.setPadding(cbp, Theme.dp(this, 2), cbp, Theme.dp(this, 2));
+        copyBtn.setClickable(true);
+        copyBtn.setOnClickListener(v -> copyToClipboard(text));
+        head.addView(copyBtn);
+        content.addView(head);
+
+        TextView body = Widgets.text(this, text, Theme.INK, 15, false);
+        body.setTextIsSelectable(true);
+        Widgets.margins(body, 0, Theme.dp(this, 6), 0, 0);
+        content.addView(body);
+
+        // Names are looked up on every draw, so a rename or archive shows.
+        Runnable render = () -> renderSender(sender, source);
+        render.run();
+        if (source.kind == InterAgent.Source.Kind.AGENT) directoryViews.add(render);
+        append(agentMessageBox(content));
+    }
+
+    /** The blue frame around another agent's message, with a bar down its left edge. */
+    private LinearLayout agentMessageBox(View content) {
+        LinearLayout box = Widgets.row(this);
+        box.setGravity(Gravity.NO_GRAVITY);
+        box.setBackground(Theme.rounded(this, Theme.INFO_SOFT, 16, Theme.INFO_LINE, 1));
+        // Clip the bar to the rounded corners rather than drawing past them.
+        box.setClipToOutline(true);
+        View bar = new View(this);
+        bar.setBackgroundColor(Theme.INFO);
+        box.addView(bar, lp(Theme.dp(this, 3), MATCH));
+        int p = Theme.dp(this, 12);
+        content.setPadding(p, Theme.dp(this, 10), p + Theme.dp(this, 2), p);
+        box.addView(content, lp(0, WRAP, 1f));
+        return box;
+    }
+
+    /** {@code FROM  api refactor  #42}, or the unavailable and unknown fallbacks. */
+    private void renderSender(LinearLayout sender, InterAgent.Source source) {
+        sender.removeAllViews();
+        TextView from = Widgets.text(this, "FROM", Theme.FAINT, 10, true);
+        from.setLetterSpacing(0.08f);
+        Widgets.margins(from, 0, 0, Theme.dp(this, 8), 0);
+        sender.addView(from);
+
+        if (source.kind != InterAgent.Source.Kind.AGENT) {
+            sender.addView(Widgets.text(this, "unknown source", Theme.FAINT, 13, false));
+            return;
+        }
+        String id = source.sessionId;
+        Session s = directory == null ? null : directory.get(id);
+        if (s == null) {
+            // Only called unavailable once the session list has actually loaded.
+            String label = "session #" + id + (directory == null ? "" : "  (unavailable)");
+            sender.addView(Widgets.text(this, label, Theme.FAINT, 13, false));
+            return;
+        }
+        TextView name = Widgets.text(this, s.name, Theme.INFO, 13, true);
+        name.setMaxLines(1);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        name.setClickable(true);
+        name.setOnClickListener(v -> openSender(s));
+        sender.addView(name, lp(WRAP, WRAP, 1f));
+        TextView idView = Widgets.idLabel(this, id, "Session", 12);
+        Widgets.margins(idView, Theme.dp(this, 8), 0, 0, 0);
+        sender.addView(idView);
+        if (s.isArchived()) {
+            TextView tag = Widgets.tag(this, "archived", Theme.FAINT);
+            Widgets.margins(tag, Theme.dp(this, 8), 0, 0, 0);
+            sender.addView(tag);
+        }
+    }
+
+    /** Open the session that sent a message, in whichever project it lives. */
+    private void openSender(Session s) {
+        if (s.id.equals(sessionId)) return;
+        startActivity(intent(this, s, null));
+    }
+
+    /** A session's current name: null if there is no such session, empty while loading. */
+    private String directoryName(String id) {
+        if (directory == null) return "";
+        Session s = directory.get(id);
+        return s == null ? null : s.name;
+    }
+
+    /** One of the session tools' summary lines, with an unknown target in red. */
+    private void renderSessionSummary(TextView view, String tool, JSONObject args) {
+        InterAgent.Summary s = InterAgent.summary(tool, args, this::directoryName);
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(s.text());
+        if (s.unknownTarget) {
+            int start = s.before.length();
+            sb.setSpan(new android.text.style.ForegroundColorSpan(Theme.DANGER),
+                    start, start + s.target.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        view.setText(sb);
+    }
+
+    /** A summary view for a session tool, kept current as session names change. */
+    private TextView sessionSummaryView(String tool, CanonicalAction action) {
+        TextView view = Widgets.mono(this, "", Theme.MUTED, 12.5f);
+        JSONObject args = action.detail();
+        Runnable render = () -> renderSessionSummary(view, tool, args);
+        render.run();
+        directoryViews.add(render);
+        return view;
+    }
+
+    /** The message a session tool will send, framed like an agent message without its header. */
+    private View sessionToolMessage(String tool, CanonicalAction action) {
+        String message = InterAgent.message(tool, action.detail());
+        if (message.isEmpty()) return null;
+        TextView body = Widgets.text(this, message, Theme.INK, 14, false);
+        body.setTextIsSelectable(true);
+        return agentMessageBox(body);
+    }
+
     private void addAgentOutput(String text) {
         if (text == null || text.isEmpty()) return;
         if (agentBubble != null) {
@@ -1588,13 +1777,16 @@ public class SessionActivity extends Activity {
         head.setPadding(hp, Theme.dp(this, 9), hp, Theme.dp(this, 9));
         head.setClickable(true);
 
+        String sessionTool = InterAgent.sessionTool(action);
         TextView caret = Widgets.text(this, "▸", Theme.FAINT, 11, false);
         Widgets.margins(caret, 0, 0, Theme.dp(this, 8), 0);
-        TextView nameView = Widgets.text(this, action.title().toUpperCase(Locale.ROOT),
+        TextView nameView = Widgets.text(this, sessionTool != null
+                        ? InterAgent.title(sessionTool) : action.title().toUpperCase(Locale.ROOT),
                 Theme.INFO, 11, true);
         nameView.setLetterSpacing(0.04f);
         Widgets.margins(nameView, 0, 0, Theme.dp(this, 8), 0);
-        TextView summary = Widgets.mono(this, action.summary(), Theme.MUTED, 12.5f);
+        TextView summary = sessionTool != null ? sessionSummaryView(sessionTool, action)
+                : Widgets.mono(this, action.summary(), Theme.MUTED, 12.5f);
         summary.setMaxLines(1);
         summary.setEllipsize(android.text.TextUtils.TruncateAt.END);
         summary.setLayoutParams(lp(0, WRAP, 1f));
@@ -1626,6 +1818,14 @@ public class SessionActivity extends Activity {
         });
 
         wrap.addView(head);
+        // A message to another session is shown outright, above the
+        // collapsed arguments.
+        View message = sessionTool == null ? null : sessionToolMessage(sessionTool, action);
+        if (message != null) {
+            LinearLayout.LayoutParams mLp = lp(MATCH, WRAP);
+            mLp.setMargins(hp, 0, hp, Theme.dp(this, 11));
+            wrap.addView(message, mLp);
+        }
         wrap.addView(body);
         append(wrap);
 
@@ -1838,7 +2038,9 @@ public class SessionActivity extends Activity {
         TextView tag = Widgets.text(this, auto ? "AUTO-APPROVED" : "APPROVAL REQUIRED", accent, 11, true);
         tag.setLetterSpacing(0.06f);
         Widgets.margins(tag, 0, 0, Theme.dp(this, 10), 0);
-        TextView toolView = Widgets.mono(this, action.title(), Theme.INK, 12.5f);
+        final String sessionTool = InterAgent.sessionTool(action);
+        TextView toolView = Widgets.mono(this, sessionTool != null
+                ? InterAgent.title(sessionTool) : action.title(), Theme.INK, 12.5f);
         toolView.setBackground(Theme.rounded(this, 0x40000000, 6));
         int tp = Theme.dp(this, 8);
         toolView.setPadding(tp, Theme.dp(this, 2), tp, Theme.dp(this, 2));
@@ -1871,7 +2073,22 @@ public class SessionActivity extends Activity {
         View formatted = ToolFormat.body(this, action);
         if (formatted instanceof TextView) ((TextView) formatted).setTextIsSelectable(true);
         int bp = Theme.dp(this, 11);
-        if (formatted != null) {
+        if (sessionTool != null) {
+            // On its own line: the target has to be readable before approving,
+            // and a bad id shows in red.
+            TextView summary = sessionSummaryView(sessionTool, action);
+            summary.setTextIsSelectable(true);
+            LinearLayout.LayoutParams sLp = lp(MATCH, WRAP);
+            sLp.topMargin = Theme.dp(this, 9);
+            card.addView(summary, sLp);
+            View message = sessionToolMessage(sessionTool, action);
+            if (message != null) {
+                LinearLayout.LayoutParams mLp = lp(MATCH, WRAP);
+                mLp.topMargin = Theme.dp(this, 11);
+                card.addView(message, mLp);
+            }
+            addRawToggle(card, action.json());
+        } else if (formatted != null) {
             HorizontalScrollView bodyScroll = new HorizontalScrollView(this);
             bodyScroll.addView(formatted, lp(WRAP, WRAP));
             bodyScroll.setPadding(bp, bp, bp, bp);

@@ -37,6 +37,9 @@ final class Theme {
 
     static final int DANGER_SOFT = 0x22EF6F63;
     static final int DANGER_LINE = 0x66EF6F63;
+    // Another agent's message: blue, as the user's own is orange.
+    static final int INFO_SOFT = 0x217EA7E0; // ~13% opacity
+    static final int INFO_LINE = 0x667EA7E0; // ~40% opacity
 
     static int dp(Context ctx, float value) {
         return Math.round(TypedValue.applyDimension(

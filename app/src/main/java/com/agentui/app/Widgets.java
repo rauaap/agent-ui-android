@@ -159,6 +159,30 @@ final class Widgets {
         return b;
     }
 
+    /**
+     * A session or worktree id as {@code #42}, monospace and faint. Tapping it
+     * copies the bare number, which is what an agent's tool call takes.
+     *
+     * @param what "Session" or "Worktree", for the confirmation toast
+     */
+    static TextView idLabel(Context ctx, String id, String what, float sp) {
+        TextView t = mono(ctx, "#" + id, Theme.FAINT, sp);
+        t.setClickable(true);
+        t.setFocusable(true);
+        t.setOnClickListener(v -> copyId(ctx, id, what));
+        return t;
+    }
+
+    /** Put a bare id on the clipboard and say which kind it was. */
+    static void copyId(Context ctx, String id, String what) {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(android.content.ClipData.newPlainText(what + " ID", id));
+        android.widget.Toast.makeText(ctx, what + " ID copied",
+                android.widget.Toast.LENGTH_SHORT).show();
+    }
+
     static LinearLayout.LayoutParams lp(int w, int h) {
         return new LinearLayout.LayoutParams(w, h);
     }

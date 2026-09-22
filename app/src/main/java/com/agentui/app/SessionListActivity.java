@@ -489,6 +489,7 @@ public class SessionListActivity extends Activity {
         card.setLayoutParams(cardLp);
         card.setClickable(true);
         card.setOnClickListener(v -> openSession(s));
+        card.setOnLongClickListener(v -> { showSessionMenu(s); return true; });
 
         // head: name + (badge, delete)
         LinearLayout head = Widgets.row(this);
@@ -551,18 +552,36 @@ public class SessionListActivity extends Activity {
     }
 
     private void openSession(Session s) {
-        Intent i = new Intent(this, SessionActivity.class);
-        i.putExtra(SessionActivity.EXTRA_ID, s.id);
-        i.putExtra(SessionActivity.EXTRA_NAME, s.name);
-        i.putExtra(SessionActivity.EXTRA_AGENT, s.agent);
-        i.putExtra(SessionActivity.EXTRA_DIR, s.workingDir);
-        i.putExtra(SessionActivity.EXTRA_PROJECT_DIR, projectDir);
-        i.putExtra(SessionActivity.EXTRA_WORKTREE_ID, s.worktreeId);
-        i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
-        i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
-        i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
-        i.putExtra(SessionActivity.EXTRA_ARCHIVED, s.isArchived());
-        startActivity(i);
+        startActivity(SessionActivity.intent(this, s, projectDir));
+    }
+
+    /**
+     * The long-press menu. Copying the id comes first so it can be handed to
+     * another agent's session tools; archive and delete repeat what the
+     * settings screen and the card's own bin already offer.
+     */
+    private void showSessionMenu(Session s) {
+        String archiveLabel = s.isArchived() ? "Unarchive" : "Archive";
+        new AlertDialog.Builder(this)
+                .setTitle(s.name)
+                .setItems(new String[] {"Copy session ID", archiveLabel, "Delete…"}, (d, which) -> {
+                    if (which == 0) Widgets.copyId(this, s.id, "Session");
+                    else if (which == 1) setArchived(s, !s.isArchived());
+                    else confirmDelete(s);
+                })
+                .show();
+    }
+
+    private void setArchived(Session s, boolean archive) {
+        api.setSessionArchived(s.id, archive, new Api.Cb<Session>() {
+            @Override public void onResult(Session session) {
+                toast(archive ? "Archived — it's under Settings ▸ Archived" : "Unarchived");
+                loadSessions();
+            }
+            @Override public void onError(String message) {
+                toast("Couldn't " + (archive ? "archive" : "unarchive") + ": " + message);
+            }
+        });
     }
 
     /* ---------------------------------------------------------------- */
