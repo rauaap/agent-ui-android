@@ -343,7 +343,7 @@ public class ProjectListActivity extends Activity {
             head.addView(missing);
         }
 
-        TextView del = Widgets.text(this, "🗑", Theme.MUTED, 15, false);
+        TextView del = Widgets.text(this, "×", Theme.MUTED, 22, true);
         int dp32 = Theme.dp(this, 32);
         del.setGravity(Gravity.CENTER);
         del.setLayoutParams(lp(dp32, dp32));

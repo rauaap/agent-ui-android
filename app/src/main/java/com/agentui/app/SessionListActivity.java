@@ -491,7 +491,7 @@ public class SessionListActivity extends Activity {
         card.setOnClickListener(v -> openSession(s));
         card.setOnLongClickListener(v -> { showSessionMenu(s); return true; });
 
-        // head: name + (badge, delete)
+        // head: name + badge; delete lives in the long-press menu
         LinearLayout head = Widgets.row(this);
         TextView name = Widgets.text(this, s.name, Theme.INK, 16, true);
         name.setLayoutParams(lp(0, WRAP, 1f));
@@ -507,14 +507,6 @@ public class SessionListActivity extends Activity {
         }
         TextView badge = Widgets.statusBadge(this, s.status);
         actions.addView(badge);
-        TextView del = Widgets.text(this, "🗑", Theme.MUTED, 15, false);
-        int dp32 = Theme.dp(this, 32);
-        del.setGravity(Gravity.CENTER);
-        del.setLayoutParams(lp(dp32, dp32));
-        Widgets.margins(del, Theme.dp(this, 8), 0, 0, 0);
-        del.setClickable(true);
-        del.setOnClickListener(v -> confirmDelete(s));
-        actions.addView(del);
         head.addView(actions);
         card.addView(head);
 

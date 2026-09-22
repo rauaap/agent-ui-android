@@ -404,7 +404,8 @@ public class ArchivedActivity extends Activity {
     }
 
     private TextView deleteButton(View.OnClickListener action) {
-        TextView b = Widgets.ghostButton(this, "🗑");
+        TextView b = Widgets.ghostButton(this, "×");
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
         b.setLayoutParams(lp(Theme.dp(this, 40), Theme.dp(this, 34)));
         Widgets.margins(b, Theme.dp(this, 8), 0, 0, 0);
         b.setOnClickListener(action);
