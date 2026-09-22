@@ -83,30 +83,6 @@ final class InterAgent {
         return null;
     }
 
-    /**
-     * Whether an approval is for the session-tool call just shown, despite a
-     * different {@code call_id}. Claude reaches these tools over MCP, which
-     * doesn't say which tool_use a call belongs to, so the server gives the
-     * approval an id of its own. The approval names the bare tool and carries
-     * validated arguments, which can add defaults ({@code limit}) but never
-     * change what the agent sent.
-     */
-    static boolean sameCall(CanonicalAction shown, CanonicalAction approval) {
-        String tool = sessionTool(shown);
-        if (tool == null || !tool.equals(sessionTool(approval))) return false;
-        JSONObject sent = shown.detail();
-        JSONObject approved = approval.detail();
-        java.util.Iterator<String> keys = sent.keys();
-        while (keys.hasNext()) {
-            String key = keys.next();
-            if (!approved.has(key)
-                    || !String.valueOf(sent.opt(key)).equals(String.valueOf(approved.opt(key)))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     /** {@code MESSAGE SESSION} for {@code message_session}. */
     static String title(String tool) {
         return tool.replace('_', ' ').toUpperCase(Locale.ROOT);

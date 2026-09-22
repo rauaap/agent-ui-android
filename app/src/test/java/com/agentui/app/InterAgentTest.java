@@ -51,31 +51,6 @@ public class InterAgentTest {
         assertNull(InterAgent.sessionTool("unread_session"));
     }
 
-    private static CanonicalAction other(String name, String args) throws Exception {
-        return CanonicalAction.parse(new JSONObject("{kind:'other',name:'" + name + "',arguments:" + args + "}"));
-    }
-
-    @Test public void approvalMatchesTheMcpCallItGates() throws Exception {
-        assertTrue(InterAgent.sameCall(
-                other("mcp__agent_ui__message_session", "{session_id:42,message:'hi'}"),
-                other("message_session", "{session_id:42,message:'hi'}")));
-        // Validation fills in the default limit; that is still the same call.
-        assertTrue(InterAgent.sameCall(
-                other("mcp__agent_ui__read_session", "{session_id:42}"),
-                other("read_session", "{session_id:42,limit:200}")));
-    }
-
-    @Test public void approvalForADifferentCallDoesNotMatch() throws Exception {
-        assertFalse(InterAgent.sameCall(
-                other("mcp__agent_ui__message_session", "{session_id:42,message:'hi'}"),
-                other("message_session", "{session_id:43,message:'hi'}")));
-        assertFalse(InterAgent.sameCall(
-                other("mcp__agent_ui__read_session", "{session_id:42}"),
-                other("message_session", "{session_id:42,message:'hi'}")));
-        assertFalse(InterAgent.sameCall(
-                other("Deploy", "{env:'x'}"), other("Deploy", "{env:'x'}")));
-    }
-
     @Test public void titlesDropThePrefixAndUnderscores() {
         assertEquals("MESSAGE SESSION", InterAgent.title("message_session"));
     }
