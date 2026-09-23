@@ -193,12 +193,16 @@ final class Widgets {
 
     /** Put a bare id on the clipboard and say which kind it was. */
     static void copyId(Context ctx, String id, String what) {
+        copy(ctx, what + " ID", id, what + " ID copied");
+    }
+
+    /** Put {@code text} on the clipboard under {@code label} and confirm with {@code toast}. */
+    static void copy(Context ctx, String label, String text, String toast) {
         android.content.ClipboardManager cm = (android.content.ClipboardManager)
                 ctx.getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm == null) return;
-        cm.setPrimaryClip(android.content.ClipData.newPlainText(what + " ID", id));
-        android.widget.Toast.makeText(ctx, what + " ID copied",
-                android.widget.Toast.LENGTH_SHORT).show();
+        cm.setPrimaryClip(android.content.ClipData.newPlainText(label, text));
+        android.widget.Toast.makeText(ctx, toast, android.widget.Toast.LENGTH_SHORT).show();
     }
 
     static LinearLayout.LayoutParams lp(int w, int h) {

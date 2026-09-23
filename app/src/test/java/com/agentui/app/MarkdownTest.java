@@ -308,6 +308,36 @@ public class MarkdownTest {
     }
 
     @Test
+    public void fenceInfoStringNamesLanguage() {
+        assertEquals("kotlin", only(parse("```kotlin\nval x = 1\n```"), Markdown.Type.CODE_BLOCK).lang);
+        assertEquals("js", only(parse("``` js title=a.js\nx\n```"), Markdown.Type.CODE_BLOCK).lang);
+        assertNull(only(parse("```\nx\n```"), Markdown.Type.CODE_BLOCK).lang);
+    }
+
+    @Test
+    public void blocksSplitProseAroundCodeBlocks() {
+        List<Markdown.Block> blocks = Markdown.blocks(
+                parse("intro `x`\n\n```java\nint a;\n  int b;\n```\nafter\n```\n```"));
+        assertEquals(4, blocks.size());
+
+        Markdown.Doc intro = blocks.get(0).doc;
+        assertEquals("intro x", intro.text);
+        assertEquals("x", sub(intro, only(intro, Markdown.Type.CODE)));
+
+        Markdown.Block code = blocks.get(1);
+        assertNull(code.doc);
+        assertNull(code.table);
+        assertEquals("int a;\n  int b;", code.code);
+        assertEquals("java", code.lang);
+
+        assertEquals("after", blocks.get(2).doc.text);
+
+        // an empty block still gets its card
+        assertEquals("", blocks.get(3).code);
+        assertNull(blocks.get(3).lang);
+    }
+
+    @Test
     public void blocksWithoutTablesIsOneProseBlock() {
         List<Markdown.Block> blocks = Markdown.blocks(parse("one\n\ntwo"));
         assertEquals(1, blocks.size());

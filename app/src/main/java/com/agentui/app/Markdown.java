@@ -28,7 +28,9 @@ import java.util.List;
  * lists, links and pipe tables.
  *
  * <p>Tables are parsed into {@link Table}s of per-cell docs; {@link #renderInto}
- * shows each as a grid of cell views in its own sideways-scrolling box.
+ * shows each as a grid of cell views in its own sideways-scrolling box. Fenced
+ * code blocks likewise get their own card, headed by the fence's language and
+ * a button that copies just that block.
  *
  * <p>{@link #parse} is pure (no Android types) so it can be unit-tested on the
  * plain JVM, mirroring {@link LineDiff}. It strips the markers and emits the
@@ -55,13 +57,19 @@ final class Markdown {
         final Type type;
         final int level;   // heading level (1..6); 0 otherwise
         final String href; // link target; null otherwise
+        final String lang; // code block language; null otherwise or if unnamed
 
         Span(int start, int end, Type type, int level, String href) {
+            this(start, end, type, level, href, null);
+        }
+
+        Span(int start, int end, Type type, int level, String href, String lang) {
             this.start = start;
             this.end = end;
             this.type = type;
             this.level = level;
             this.href = href;
+            this.lang = lang;
         }
     }
 
@@ -116,6 +124,9 @@ final class Markdown {
             // fenced code block ``` ... ```
             int openingTicks = leadingBackticks(trimmed);
             if (openingTicks > 0) {
+                // the info string's first word names the language: ```kotlin
+                String info = trimmed.substring(openingTicks).trim();
+                String lang = info.isEmpty() ? null : info.split("\\s+", 2)[0];
                 StringBuilder code = new StringBuilder();
                 int j = i + 1;
                 while (j < lines.length) {
@@ -131,7 +142,7 @@ final class Markdown {
                 if (out.length() > 0) out.append('\n');
                 int start = out.length();
                 out.append(code);
-                spans.add(new Span(start, out.length(), Type.CODE_BLOCK, 0, null));
+                spans.add(new Span(start, out.length(), Type.CODE_BLOCK, 0, null, lang));
                 i = (j < lines.length) ? j + 1 : j; // skip the closing fence
                 continue;
             }
@@ -302,31 +313,41 @@ final class Markdown {
         return new Table(aligns, cells);
     }
 
-    /** A run of the document shown in its own view: prose, or one table. */
+    /** A run of the document shown in its own view: prose, one table, or one code block. */
     static final class Block {
-        final Doc doc;     // prose; null for a table
-        final Table table; // null for prose
+        final Doc doc;     // prose; null otherwise
+        final Table table; // a table; null otherwise
+        final String code; // a code block's text; null otherwise
+        final String lang; // the code block's language; null if unnamed
 
-        Block(Doc doc, Table table) {
+        Block(Doc doc, Table table, String code, String lang) {
             this.doc = doc;
             this.table = table;
+            this.code = code;
+            this.lang = lang;
         }
     }
 
     /**
-     * Split a parsed doc at its tables. Prose blocks drop the newlines at their
-     * edges, since the views they land in are spaced apart already; prose that
-     * is only newlines is dropped entirely.
+     * Split a parsed doc at its tables and code blocks. Prose blocks drop the
+     * newlines at their edges, since the views they land in are spaced apart
+     * already; prose that is only newlines is dropped entirely. Code blocks are
+     * kept even when empty, so a fence shows its card as soon as it opens.
      */
     static List<Block> blocks(Doc doc) {
         List<Block> out = new ArrayList<>();
         int pos = 0;
         int t = 0;
         for (Span s : doc.spans) {
-            if (s.type != Type.TABLE) continue;
-            prose(doc, pos, s.start, out);
-            out.add(new Block(null, doc.tables.get(t++)));
-            pos = s.end;
+            if (s.type == Type.TABLE) {
+                prose(doc, pos, s.start, out);
+                out.add(new Block(null, doc.tables.get(t++), null, null));
+                pos = s.end;
+            } else if (s.type == Type.CODE_BLOCK) {
+                prose(doc, pos, s.start, out);
+                out.add(new Block(null, null, doc.text.substring(s.start, s.end), s.lang));
+                pos = s.end;
+            }
         }
         prose(doc, pos, doc.text.length(), out);
         return out;
@@ -335,7 +356,7 @@ final class Markdown {
     private static void prose(Doc doc, int start, int end, List<Block> out) {
         while (start < end && doc.text.charAt(start) == '\n') start++;
         while (end > start && doc.text.charAt(end - 1) == '\n') end--;
-        if (start < end) out.add(new Block(slice(doc, start, end), null));
+        if (start < end) out.add(new Block(slice(doc, start, end), null, null, null));
     }
 
     /** The text in [start, end) with the spans inside it, rebased to 0. */
@@ -450,22 +471,39 @@ final class Markdown {
     // larger text for higher-level headings
     private static final float[] HEADING_SCALE = {1.5f, 1.3f, 1.15f, 1.08f, 1.0f, 1.0f};
 
+    private enum Kind { PROSE, TABLE, CODE }
+
+    private static Kind kind(Block block) {
+        if (block.table != null) return Kind.TABLE;
+        return block.code != null ? Kind.CODE : Kind.PROSE;
+    }
+
+    private static Kind kind(View view) {
+        if (view instanceof HorizontalScrollView) return Kind.TABLE;
+        return view instanceof TextView ? Kind.PROSE : Kind.CODE;
+    }
+
     /**
      * Render {@code md} into {@code box} (a vertical {@link LinearLayout}): prose
      * in selectable text views, each table as a grid of cell views in its own
-     * sideways-scrolling box. Existing views are reused while their kind still
-     * matches, so re-rendering as chunks stream in keeps a table's scroll offset.
+     * sideways-scrolling box, and each code block as a card. Existing views are
+     * reused while their kind still matches, so re-rendering as chunks stream in
+     * keeps a table's or code block's scroll offset.
      */
     static void renderInto(LinearLayout box, String md) {
         Context ctx = box.getContext();
         List<Block> blocks = blocks(parse(md));
         for (int b = 0; b < blocks.size(); b++) {
             Block block = blocks.get(b);
-            boolean isTable = block.table != null;
+            Kind kind = kind(block);
             View view = b < box.getChildCount() ? box.getChildAt(b) : null;
-            if (view == null || (view instanceof HorizontalScrollView) != isTable) {
+            if (view == null || kind(view) != kind) {
                 if (view != null) box.removeViewAt(b);
-                view = isTable ? tableView(ctx) : proseView(ctx);
+                switch (kind) {
+                    case TABLE: view = tableView(ctx); break;
+                    case CODE: view = codeView(ctx); break;
+                    default: view = proseView(ctx); break;
+                }
                 box.addView(view, b);
             }
             LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) view.getLayoutParams();
@@ -474,13 +512,72 @@ final class Markdown {
                 lp.topMargin = top;
                 view.setLayoutParams(lp);
             }
-            if (isTable) {
-                bindTable((TableLayout) ((HorizontalScrollView) view).getChildAt(0), block.table);
-            } else {
-                ((TextView) view).setText(style(block.doc));
+            switch (kind) {
+                case TABLE:
+                    bindTable((TableLayout) ((HorizontalScrollView) view).getChildAt(0), block.table);
+                    break;
+                case CODE:
+                    bindCode((LinearLayout) view, block);
+                    break;
+                default:
+                    ((TextView) view).setText(style(block.doc));
+                    break;
             }
         }
         while (box.getChildCount() > blocks.size()) box.removeViewAt(box.getChildCount() - 1);
+    }
+
+    /**
+     * A code block's card: a header with the language and a copy button, a
+     * divider, then the code in a box that scrolls sideways rather than wrapping.
+     */
+    private static LinearLayout codeView(Context ctx) {
+        LinearLayout card = Widgets.column(ctx);
+        card.setBackground(Theme.rounded(ctx, Theme.BG, 10, Theme.LINE, 1));
+        card.setClipToOutline(true);
+        card.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout header = Widgets.row(ctx);
+        header.setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 2), Theme.dp(ctx, 4), Theme.dp(ctx, 2));
+        TextView lang = Widgets.mono(ctx, "", Theme.MUTED, 11.5f);
+        header.addView(lang, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView copy = Widgets.text(ctx, "COPY", Theme.FAINT, 11, true);
+        copy.setLetterSpacing(0.06f);
+        copy.setPadding(Theme.dp(ctx, 8), Theme.dp(ctx, 6), Theme.dp(ctx, 8), Theme.dp(ctx, 6));
+        copy.setClickable(true);
+        copy.setFocusable(true);
+        header.addView(copy);
+        card.addView(header);
+
+        View divider = new View(ctx);
+        divider.setBackgroundColor(Theme.LINE);
+        card.addView(divider, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, hairline(ctx)));
+
+        HorizontalScrollView scroll = new HorizontalScrollView(ctx);
+        TextView code = Widgets.mono(ctx, "", Theme.INK, 13);
+        code.setTextIsSelectable(true);
+        int h = Theme.dp(ctx, 12);
+        int v = Theme.dp(ctx, 10);
+        code.setPadding(h, v, h, v);
+        scroll.addView(code, new HorizontalScrollView.LayoutParams(
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT,
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT));
+        card.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        // copies what is shown, so it keeps up as the block streams in
+        copy.setOnClickListener(x ->
+                Widgets.copy(ctx, "code", code.getText().toString(), "Copied"));
+        return card;
+    }
+
+    private static void bindCode(LinearLayout card, Block block) {
+        LinearLayout header = (LinearLayout) card.getChildAt(0);
+        ((TextView) header.getChildAt(0)).setText(block.lang == null ? "" : block.lang);
+        HorizontalScrollView scroll = (HorizontalScrollView) card.getChildAt(2);
+        ((TextView) scroll.getChildAt(0)).setText(block.code);
     }
 
     private static TextView proseView(Context ctx) {
@@ -587,11 +684,6 @@ final class Markdown {
                     span(sb, new BackgroundColorSpan(0x33000000), st, en);
                     span(sb, new ForegroundColorSpan(Theme.ACCENT_STRONG), st, en);
                     break;
-                case CODE_BLOCK:
-                    span(sb, new TypefaceSpan("monospace"), st, en);
-                    span(sb, new BackgroundColorSpan(0x40000000), st, en);
-                    span(sb, new RelativeSizeSpan(0.92f), st, en);
-                    break;
                 case HEADING:
                     span(sb, new StyleSpan(Typeface.BOLD), st, en);
                     span(sb, new RelativeSizeSpan(
@@ -601,9 +693,9 @@ final class Markdown {
                     span(sb, new ForegroundColorSpan(Theme.INFO), st, en);
                     span(sb, new UnderlineSpan(), st, en);
                     break;
+                case CODE_BLOCK:
                 case TABLE:
                     break; // rendered as its own view, see renderInto
-
             }
         }
         return sb;
