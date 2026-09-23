@@ -385,6 +385,11 @@ public class SessionActivity extends Activity {
             Widgets.margins(idView, Theme.dp(this, 8), 0, 0, Theme.dp(this, 2));
             nameRow.addView(idView);
         }
+        // Status as a bare dot: a full badge crowded the bar and squeezed the
+        // worktree path whenever the Stop button appeared beside it.
+        statusHolder = Widgets.row(this);
+        Widgets.margins(statusHolder, Theme.dp(this, 6), 0, 0, Theme.dp(this, 2));
+        nameRow.addView(statusHolder);
         headings.addView(nameRow, lp(WRAP, WRAP));
         // The effective cwd remains the former worktree path after an explicit
         // detach; worktree_id null must not make that look like the project root.
@@ -406,10 +411,6 @@ public class SessionActivity extends Activity {
         gearBtn.setClickable(true);
         gearBtn.setOnClickListener(v -> openSettings());
         header.addView(gearBtn);
-
-        statusHolder = Widgets.row(this);
-        Widgets.margins(statusHolder, Theme.dp(this, 8), 0, 0, 0);
-        header.addView(statusHolder);
 
         stopBtn = Widgets.dangerButton(this, "Stop");
         Widgets.margins(stopBtn, Theme.dp(this, 8), 0, 0, 0);
@@ -1227,7 +1228,7 @@ public class SessionActivity extends Activity {
     private void applyStatus(String s) {
         status = s;
         statusHolder.removeAllViews();
-        statusHolder.addView(Widgets.statusBadge(this, s));
+        statusHolder.addView(Widgets.statusDot(this, s));
 
         boolean busy = "running".equals(s) || "awaiting_approval".equals(s);
         if (busy && notifyOn) {

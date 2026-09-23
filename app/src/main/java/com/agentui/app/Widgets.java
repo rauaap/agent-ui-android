@@ -48,18 +48,18 @@ final class Widgets {
     /** A pill-shaped status badge coloured per status, like the web .status-badge. */
     static TextView statusBadge(Context ctx, String status) {
         TextView t = new TextView(ctx);
-        int fg;
+        int fg = statusColor(status);
         int fill;
         int stroke;
         switch (status) {
             case "running":
-                fg = Theme.RUNNING; fill = Theme.withAlpha(Theme.RUNNING, 0x1F); stroke = Theme.withAlpha(Theme.RUNNING, 0x47);
+                fill = Theme.withAlpha(fg, 0x1F); stroke = Theme.withAlpha(fg, 0x47);
                 break;
             case "awaiting_approval":
-                fg = Theme.AWAITING; fill = Theme.withAlpha(Theme.AWAITING, 0x21); stroke = Theme.withAlpha(Theme.AWAITING, 0x4D);
+                fill = Theme.withAlpha(fg, 0x21); stroke = Theme.withAlpha(fg, 0x4D);
                 break;
             default:
-                fg = Theme.IDLE; fill = Theme.withAlpha(Theme.IDLE, 0x1F); stroke = Theme.withAlpha(Theme.IDLE, 0x38);
+                fill = Theme.withAlpha(fg, 0x1F); stroke = Theme.withAlpha(fg, 0x38);
                 break;
         }
         t.setText("● " + status.replace("_", " ").toUpperCase());
@@ -72,6 +72,24 @@ final class Widgets {
         int padH = Theme.dp(ctx, 10);
         int padV = Theme.dp(ctx, 4);
         t.setPadding(padH, padV, padH, padV);
+        return t;
+    }
+
+    static int statusColor(String status) {
+        switch (status) {
+            case "running": return Theme.RUNNING;
+            case "awaiting_approval": return Theme.AWAITING;
+            default: return Theme.IDLE;
+        }
+    }
+
+    /**
+     * Just the badge's dot, for a header too narrow for the label. The status
+     * word stays available to screen readers.
+     */
+    static TextView statusDot(Context ctx, String status) {
+        TextView t = text(ctx, "●", statusColor(status), 11, false);
+        t.setContentDescription(status.replace("_", " "));
         return t;
     }
 
