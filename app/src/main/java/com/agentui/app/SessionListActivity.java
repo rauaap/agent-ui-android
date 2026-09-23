@@ -779,6 +779,7 @@ public class SessionListActivity extends Activity {
                     Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? sandbox.isChecked() : null,
                     new Api.StatusCb<Session>() {
                         @Override public void onResult(Session session) {
+                            api.prefs().setNotify(session.id, true);
                             dialog.dismiss();
                             openSession(session);
                         }

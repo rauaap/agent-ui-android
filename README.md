@@ -91,11 +91,12 @@ Device smoke checks before release:
   bottom search uses component-prefix matching and ranking. Tapping a result
   inserts it into prompts, or safely shell-escapes it into the token at the
   cursor in a command.
-- **Background notifications** — toggle the bell on a session to watch it from a
-  foreground service. You get a high-priority notification when the task finishes
+- **Background notifications** — enabled by default for sessions created in the
+  Android app; disable them in session settings. A foreground service watches
+  enabled sessions. You get a high-priority notification when the task finishes
   or needs your approval, even with the app off-screen; the watch stops once the
   turn ends and is silent for whichever session you're currently viewing. The
-  opt-in is remembered per session **per server address**: ids are only unique
+  preference is remembered per session **per server address**: ids are only unique
   within one backend, so pointing the app elsewhere starts from a clean set
   rather than inheriting whatever wore the same id there.
 - **Archive** — file a session or a whole project away without deleting it.
