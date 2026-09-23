@@ -45,6 +45,12 @@ final class Session {
     Boolean sandbox;
     boolean autoApproveWrite;
     boolean autoApproveCommand;
+    /**
+     * This session's own outgoing message_session, start_session and
+     * read_session calls. Messages it receives are not affected, and the
+     * server still prompts for a message to an unsandboxed session.
+     */
+    boolean autoApproveInterAgent;
 
     Session(String id, String name, String projectId, String workingDir, String worktreeId,
             String agent, String status, String lastActiveAt, String archivedAt,
@@ -95,6 +101,7 @@ final class Session {
                 o.isNull("archived_at") ? "" : o.optString("archived_at", ""),
                 o.optBoolean("auto_approve_write", false),
                 o.optBoolean("auto_approve_command", false));
+        session.autoApproveInterAgent = o.optBoolean("auto_approve_inter_agent_communication", false);
         session.sandbox = o.opt("sandbox") instanceof Boolean ? (Boolean) o.opt("sandbox") : null;
         return session;
     }

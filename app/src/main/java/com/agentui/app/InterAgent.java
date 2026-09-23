@@ -128,10 +128,9 @@ final class InterAgent {
                 if (!agent.isEmpty()) parts.add(agent);
                 String worktree = Json.id(args, "worktree_id");
                 if (!worktree.isEmpty()) parts.add("worktree #" + worktree);
-                // Sandboxed unless explicitly turned off, matching the server.
-                parts.add(Boolean.FALSE.equals(args.opt("sandbox")) ? "unsandboxed" : "sandboxed");
+                // No sandbox part: agent-started sessions are always sandboxed.
                 String text = "\"" + string(args, "name") + "\" in " + string(args, "project_path")
-                        + "   (" + String.join(" · ", parts) + ")";
+                        + (parts.isEmpty() ? "" : "   (" + String.join(" · ", parts) + ")");
                 return new Summary(text, "", false, "");
             }
             case READ_SESSION: {

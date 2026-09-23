@@ -27,6 +27,19 @@ public class SandboxTest {
         assertEquals(Boolean.TRUE, state.session.sandbox);
     }
 
+    @Test public void interAgentAutoApproveParsesAndFollowsLiveSettings() throws Exception {
+        assertFalse(session("").autoApproveInterAgent);
+        assertTrue(session(",\"auto_approve_inter_agent_communication\":true").autoApproveInterAgent);
+        SessionState state = new SessionState();
+        long started = SessionState.snapshot();
+        state.settings(new JSONObject("{\"auto_approve_inter_agent_communication\":true}"));
+        state.accept(session(""), started);
+        assertTrue(state.session.autoApproveInterAgent);
+        // An event from a server without the field leaves the value alone.
+        state.settings(new JSONObject("{\"auto_approve_write\":true}"));
+        assertTrue(state.session.autoApproveInterAgent);
+    }
+
     @Test public void patchResponseAlsoProtectsAgainstOlderRefresh() throws Exception {
         SessionState state = new SessionState();
         long started = SessionState.snapshot();

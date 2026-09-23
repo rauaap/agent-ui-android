@@ -59,6 +59,7 @@ public class SessionActivity extends Activity {
     static final String EXTRA_STATUS = "status";
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
+    static final String EXTRA_AUTO_INTER_AGENT = "auto_inter_agent";
     static final String EXTRA_ARCHIVED = "archived";
 
     private static final int REQ_SETTINGS = 2;
@@ -78,6 +79,7 @@ public class SessionActivity extends Activity {
         i.putExtra(EXTRA_STATUS, s.status);
         i.putExtra(EXTRA_AUTO_WRITE, s.autoApproveWrite);
         i.putExtra(EXTRA_AUTO_COMMAND, s.autoApproveCommand);
+        i.putExtra(EXTRA_AUTO_INTER_AGENT, s.autoApproveInterAgent);
         i.putExtra(EXTRA_ARCHIVED, s.isArchived());
         return i;
     }
@@ -106,6 +108,7 @@ public class SessionActivity extends Activity {
     // and the settings screen, and handed to the settings screen on open.
     private boolean autoApproveWrite;
     private boolean autoApproveCommand;
+    private boolean autoApproveInterAgent;
 
     // views
     private LinearLayout transcript;
@@ -215,6 +218,7 @@ public class SessionActivity extends Activity {
         if (status == null) status = "idle";
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
         autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
+        autoApproveInterAgent = getIntent().getBooleanExtra(EXTRA_AUTO_INTER_AGENT, false);
         archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         notifyOn = api.prefs().notifyEnabled(sessionId);
 
@@ -277,6 +281,7 @@ public class SessionActivity extends Activity {
                     worktreeId = session.worktreeId;
                     autoApproveWrite = session.autoApproveWrite;
                     autoApproveCommand = session.autoApproveCommand;
+                    autoApproveInterAgent = session.autoApproveInterAgent;
                     applyArchived(session.isArchived());
                     applyStatus(session.status);
                     if (projectDir == null && !projectId.isEmpty()) loadProjectPath();
@@ -1178,6 +1183,7 @@ public class SessionActivity extends Activity {
         i.putExtra(SessionSettingsActivity.EXTRA_STATUS, status);
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_WRITE, autoApproveWrite);
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_COMMAND, autoApproveCommand);
+        i.putExtra(SessionSettingsActivity.EXTRA_AUTO_INTER_AGENT, autoApproveInterAgent);
         i.putExtra(SessionSettingsActivity.EXTRA_ARCHIVED, archived);
         i.putExtra(SessionSettingsActivity.EXTRA_WORKING_DIR, workingDir);
         i.putExtra(SessionSettingsActivity.EXTRA_PROJECT_DIR, projectDir);
@@ -1213,6 +1219,8 @@ public class SessionActivity extends Activity {
                     SessionSettingsActivity.EXTRA_AUTO_WRITE, autoApproveWrite);
             autoApproveCommand = data.getBooleanExtra(
                     SessionSettingsActivity.EXTRA_AUTO_COMMAND, autoApproveCommand);
+            autoApproveInterAgent = data.getBooleanExtra(
+                    SessionSettingsActivity.EXTRA_AUTO_INTER_AGENT, autoApproveInterAgent);
             String newWorkingDir = data.getStringExtra(SessionSettingsActivity.EXTRA_WORKING_DIR);
             String newWorktreeId = data.getStringExtra(SessionSettingsActivity.EXTRA_WORKTREE_ID);
             if (newWorkingDir != null) workingDir = newWorkingDir;
@@ -1441,6 +1449,8 @@ public class SessionActivity extends Activity {
                 // the settings screen opens with the right state.
                 autoApproveWrite = msg.optBoolean("auto_approve_write", autoApproveWrite);
                 autoApproveCommand = msg.optBoolean("auto_approve_command", autoApproveCommand);
+                autoApproveInterAgent = msg.optBoolean("auto_approve_inter_agent_communication",
+                        autoApproveInterAgent);
                 break;
             case "input":
                 agentBubble = null;

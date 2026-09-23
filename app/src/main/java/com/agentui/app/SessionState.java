@@ -59,6 +59,7 @@ final class SessionState {
         try {
             settings.put("auto_approve_write", session.autoApproveWrite);
             settings.put("auto_approve_command", session.autoApproveCommand);
+            settings.put("auto_approve_inter_agent_communication", session.autoApproveInterAgent);
             settings.put("sandbox", session.sandbox);
         } catch (Exception ignored) {}
         settings(settings);
@@ -66,6 +67,8 @@ final class SessionState {
     static void applySettings(Session session, JSONObject msg) {
         session.autoApproveWrite = msg.optBoolean("auto_approve_write", session.autoApproveWrite);
         session.autoApproveCommand = msg.optBoolean("auto_approve_command", session.autoApproveCommand);
+        session.autoApproveInterAgent = msg.optBoolean("auto_approve_inter_agent_communication",
+                session.autoApproveInterAgent);
         if (msg.opt("sandbox") instanceof Boolean) session.sandbox = (Boolean) msg.opt("sandbox");
     }
     boolean canSaveSandbox() {

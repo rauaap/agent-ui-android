@@ -36,6 +36,7 @@ public class SessionSettingsActivity extends Activity {
     static final String EXTRA_STATUS = "status";
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
+    static final String EXTRA_AUTO_INTER_AGENT = "auto_inter_agent";
     static final String EXTRA_WORKING_DIR = "working_dir";
     static final String EXTRA_PROJECT_DIR = "project_dir";
     static final String EXTRA_WORKTREE_ID = "worktree_id";
@@ -54,6 +55,7 @@ public class SessionSettingsActivity extends Activity {
     private String status;
     private boolean autoApproveWrite;
     private boolean autoApproveCommand;
+    private boolean autoApproveInterAgent;
     private boolean archived;
     private String workingDir;
     private String projectDir;
@@ -62,6 +64,7 @@ public class SessionSettingsActivity extends Activity {
     private EditText nameField;
     private Switch writeSwitch;
     private Switch commandSwitch;
+    private Switch interAgentSwitch;
     private Switch sandboxSwitch;
     private LinearLayout sandboxRow;
     private TextView sandboxHint;
@@ -79,6 +82,7 @@ public class SessionSettingsActivity extends Activity {
         if (status == null) status = "idle";
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
         autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
+        autoApproveInterAgent = getIntent().getBooleanExtra(EXTRA_AUTO_INTER_AGENT, false);
         archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         workingDir = getIntent().getStringExtra(EXTRA_WORKING_DIR);
         if (workingDir == null) workingDir = "";
@@ -122,12 +126,16 @@ public class SessionSettingsActivity extends Activity {
         sandboxSwitch.setEnabled(state.canSaveSandbox());
         writeSwitch.setEnabled(!state.saving && !state.approvalSaving);
         commandSwitch.setEnabled(!state.saving && !state.approvalSaving);
+        interAgentSwitch.setEnabled(!state.saving && !state.approvalSaving);
         if (s != null) {
             status = s.status;
             autoApproveWrite = s.autoApproveWrite;
             autoApproveCommand = s.autoApproveCommand;
+            autoApproveInterAgent = s.autoApproveInterAgent;
             setSwitchSilently(writeSwitch, autoApproveWrite, c -> applyAutoApprove("write", c));
             setSwitchSilently(commandSwitch, autoApproveCommand, c -> applyAutoApprove("command", c));
+            setSwitchSilently(interAgentSwitch, autoApproveInterAgent,
+                    c -> applyAutoApprove("inter_agent", c));
             publishResult();
         }
     }
@@ -222,11 +230,17 @@ public class SessionSettingsActivity extends Activity {
         commandSwitch = new Switch(this);
         form.addView(toggleRow("Commands", commandSwitch, autoApproveCommand,
                 checked -> applyAutoApprove("command", checked)));
+        form.addView(spacer(10));
+        interAgentSwitch = new Switch(this);
+        form.addView(toggleRow("Inter-agent communication", interAgentSwitch, autoApproveInterAgent,
+                checked -> applyAutoApprove("inter_agent", checked)));
 
         TextView autoHint = Widgets.text(this,
-                "Skip the approval prompt for file writes/edits or shell commands "
-                        + "in this session; auto-approved tools are still shown in the "
-                        + "transcript. Reads always run.", Theme.MUTED, 12.5f, false);
+                "Skip the approval prompt for file writes/edits, shell commands, or this "
+                        + "session's own calls to message, start or read other sessions; "
+                        + "auto-approved tools are still shown in the transcript. Reads always "
+                        + "run. Messaging an unsandboxed session always asks.",
+                Theme.MUTED, 12.5f, false);
         Widgets.margins(autoHint, 0, Theme.dp(this, 7), 0, 0);
         form.addView(autoHint);
 
@@ -397,14 +411,16 @@ public class SessionSettingsActivity extends Activity {
                 state.changed();
                 autoApproveWrite = session.autoApproveWrite;
                 autoApproveCommand = session.autoApproveCommand;
+                autoApproveInterAgent = session.autoApproveInterAgent;
                 publishResult();
             }
             @Override public void onError(String message) {
                 state.approvalSaving = false;
                 state.changed();
-                Switch sw = "write".equals(category) ? writeSwitch : commandSwitch;
-                boolean previous = "write".equals(category)
-                        ? autoApproveWrite : autoApproveCommand;
+                Switch sw = "write".equals(category) ? writeSwitch
+                        : "inter_agent".equals(category) ? interAgentSwitch : commandSwitch;
+                boolean previous = "write".equals(category) ? autoApproveWrite
+                        : "inter_agent".equals(category) ? autoApproveInterAgent : autoApproveCommand;
                 setSwitchSilently(sw, previous, c -> applyAutoApprove(category, c));
                 toast("Couldn't update: " + message);
             }
@@ -552,6 +568,7 @@ public class SessionSettingsActivity extends Activity {
         data.putExtra(EXTRA_NAME, sessionName);
         data.putExtra(EXTRA_AUTO_WRITE, autoApproveWrite);
         data.putExtra(EXTRA_AUTO_COMMAND, autoApproveCommand);
+        data.putExtra(EXTRA_AUTO_INTER_AGENT, autoApproveInterAgent);
         data.putExtra(EXTRA_ARCHIVED, archived);
         data.putExtra(EXTRA_WORKING_DIR, workingDir);
         data.putExtra(EXTRA_WORKTREE_ID, worktreeId);

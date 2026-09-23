@@ -77,15 +77,15 @@ public class InterAgentTest {
         assertFalse(s.unknownTarget);
     }
 
-    @Test public void startSummaryOmitsMissingOptionalsButNotSandbox() throws Exception {
-        assertEquals("\"db migration\" in /home/me/proj   (sandboxed)",
+    @Test public void startSummaryOmitsMissingOptionals() throws Exception {
+        assertEquals("\"db migration\" in /home/me/proj",
                 InterAgent.summary("start_session",
                         new JSONObject("{name:'db migration',project_path:'/home/me/proj',message:'go'}"),
                         NAMES).text());
-        assertEquals("\"db migration\" in /p   (claude-code · worktree #7 · unsandboxed)",
+        assertEquals("\"db migration\" in /p   (claude-code · worktree #7)",
                 InterAgent.summary("start_session",
                         new JSONObject("{name:'db migration',project_path:'/p',message:'go',"
-                                + "agent:'claude-code',worktree_id:7,sandbox:false}"),
+                                + "agent:'claude-code',worktree_id:7}"),
                         NAMES).text());
     }
 

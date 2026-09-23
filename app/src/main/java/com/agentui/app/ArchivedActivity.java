@@ -243,6 +243,7 @@ public class ArchivedActivity extends Activity {
             i.putExtra(SessionActivity.EXTRA_STATUS, s.status);
             i.putExtra(SessionActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
             i.putExtra(SessionActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
+            i.putExtra(SessionActivity.EXTRA_AUTO_INTER_AGENT, s.autoApproveInterAgent);
             i.putExtra(SessionActivity.EXTRA_ARCHIVED, true);
             startActivity(i);
         });

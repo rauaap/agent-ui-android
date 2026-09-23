@@ -404,7 +404,9 @@ final class Api {
     void setAutoApprove(String id, String category, boolean checked, Cb<Session> cb) {
         JSONObject payload = new JSONObject();
         try {
-            payload.put("write".equals(category) ? "auto_approve_write" : "auto_approve_command", checked);
+            payload.put("write".equals(category) ? "auto_approve_write"
+                    : "inter_agent".equals(category) ? "auto_approve_inter_agent_communication"
+                    : "auto_approve_command", checked);
         } catch (Exception ignored) {}
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions/" + id)
