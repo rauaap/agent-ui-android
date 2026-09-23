@@ -8,3 +8,6 @@ local.properties
 *.iml
 *.apk
 *.aab
+dist/
+.last-version-code
+.last-version-code.tmp

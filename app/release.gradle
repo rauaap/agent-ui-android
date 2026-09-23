@@ -1,0 +1,62 @@
+// Release signing and versioning, applied from app/build.gradle.
+//
+// `make release` mounts the shared signing directory at /signing and passes
+// -PreleaseVersionCode=<n>. Release builds then get versionCode <n> and
+// versionName "<defaultConfig.versionName>.<n>". Debug builds are unaffected.
+// Any release build without both fails instead of producing an unsigned or
+// unversioned APK. See RELEASING.md.
+
+def signingPropsFile = file('/signing/signing.properties')
+def releaseVersionCode = findProperty('releaseVersionCode')
+
+android {
+    signingConfigs {
+        release {
+            if (signingPropsFile.exists()) {
+                def props = new Properties()
+                signingPropsFile.withInputStream { props.load(it) }
+                storeFile = new File(signingPropsFile.parentFile, props.getProperty('storeFile'))
+                storePassword = props.getProperty('storePassword')
+                keyAlias = props.getProperty('keyAlias')
+                keyPassword = props.getProperty('keyPassword')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (signingPropsFile.exists()) {
+                signingConfig = signingConfigs.release
+            }
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType('release')) { variant ->
+        if (releaseVersionCode != null) {
+            def code = releaseVersionCode as int
+            variant.outputs.each { output ->
+                output.versionCode.set(code)
+                output.versionName.set("${android.defaultConfig.versionName}.${code}".toString())
+            }
+        }
+    }
+}
+
+def checkReleaseConfig = tasks.register('checkReleaseConfig') {
+    doLast {
+        if (!signingPropsFile.exists()) {
+            throw new GradleException("Release signing is not configured: ${signingPropsFile} not found. " +
+                'Build releases with `make release` (see RELEASING.md).')
+        }
+        if (!(releaseVersionCode ==~ /[1-9][0-9]*/)) {
+            throw new GradleException('Release builds need -PreleaseVersionCode=<positive integer>. ' +
+                'Build releases with `make release` (see RELEASING.md).')
+        }
+    }
+}
+
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
+    dependsOn checkReleaseConfig
+}

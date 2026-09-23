@@ -2,6 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
+apply from: 'release.gradle'
+
 android {
     namespace 'com.agentui.app'
     compileSdk 36
