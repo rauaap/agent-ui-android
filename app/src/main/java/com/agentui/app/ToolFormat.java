@@ -91,6 +91,14 @@ final class ToolFormat {
         if (cmd.isEmpty()) return null;
 
         SpannableStringBuilder sb = new SpannableStringBuilder();
+        String desc = in.optString("description", "");
+        if (!desc.isEmpty()) {
+            sb.append("# ").append(desc);
+            sb.setSpan(new ForegroundColorSpan(CTX), 0, sb.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.append('\n');
+        }
+
         String[] lines = cmd.split("\n", -1);
         for (int i = 0; i < lines.length; i++) {
             if (i > 0) sb.append('\n');
@@ -99,15 +107,6 @@ final class ToolFormat {
             sb.setSpan(new ForegroundColorSpan(Theme.ACCENT_STRONG), start, sb.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             sb.append(lines[i]);
-        }
-
-        String desc = in.optString("description", "");
-        if (!desc.isEmpty()) {
-            sb.append('\n');
-            int start = sb.length();
-            sb.append("# ").append(desc);
-            sb.setSpan(new ForegroundColorSpan(CTX), start, sb.length(),
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         return Widgets.mono(ctx, sb, Theme.INK, 13f);
     }
