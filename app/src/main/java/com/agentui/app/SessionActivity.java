@@ -21,7 +21,6 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONArray;
@@ -112,7 +111,7 @@ public class SessionActivity extends Activity {
 
     // views
     private LinearLayout transcript;
-    private ScrollView scroll;
+    private StickyScrollView scroll;
     private TextView scrollDownBtn;
     private LinearLayout statusHolder;
     private TextView nameView;
@@ -438,22 +437,14 @@ public class SessionActivity extends Activity {
         FrameLayout scrollArea = new FrameLayout(this);
         scrollArea.setLayoutParams(lp(MATCH, 0, 1f));
 
-        scroll = new ScrollView(this);
+        // Follows the bottom while the reader is there and holds their place
+        // otherwise, through new content, the keyboard and footer changes alike.
+        scroll = new StickyScrollView(this);
         scroll.setLayoutParams(new FrameLayout.LayoutParams(MATCH, MATCH));
         scroll.setFillViewport(true);
         transcript = newTranscript();
         scroll.addView(transcript);
-        scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> updateScrollButton());
-        // The keyboard opening (or the composer growing) takes height off the bottom
-        // of the transcript. A ScrollView keeps its scroll offset through that, which
-        // pushes whatever you were reading down behind the keyboard, so shift the
-        // scroll by the same amount to hold the bottom edge of the scrollback still.
-        scroll.addOnLayoutChangeListener((v, left, top, right, bottom,
-                                          oldLeft, oldTop, oldRight, oldBottom) -> {
-            int shrink = (oldBottom - oldTop) - (bottom - top);
-            if (shrink != 0) scroll.scrollBy(0, shrink);
-            updateScrollButton();
-        });
+        scroll.setOnPositionChanged(this::updateScrollButton);
         scrollArea.addView(scroll);
 
         // Floating down arrow, shown only when the transcript can scroll further down.
@@ -462,7 +453,7 @@ public class SessionActivity extends Activity {
         scrollDownBtn.setBackground(Theme.pill(this, Theme.PANEL2, Theme.LINE, 1));
         scrollDownBtn.setElevation(Theme.dp(this, 4));
         scrollDownBtn.setVisibility(View.GONE);
-        scrollDownBtn.setOnClickListener(v -> scrollToBottom());
+        scrollDownBtn.setOnClickListener(v -> scroll.scrollToEnd());
         int sdSize = Theme.dp(this, 40);
         FrameLayout.LayoutParams sdLp = new FrameLayout.LayoutParams(sdSize, sdSize);
         sdLp.gravity = Gravity.BOTTOM | Gravity.END;
@@ -1385,20 +1376,14 @@ public class SessionActivity extends Activity {
         awaitingReplay = false;
         if (replayBuffer == null) return;
 
-        // The replacement transcript represents the same conversation, so keep
-        // the reader at the same offset. Bottom is treated specially: a raw
-        // offset would leave it above any entries that arrived during reconnect.
-        boolean wasAtBottom = isAtBottom();
-        int previousScrollY = scroll.getScrollY();
+        // The replacement transcript represents the same conversation. The
+        // scroll view keeps its offset across the swap, so a reader scrolled up
+        // stays where they were, and one at the bottom follows it to the new
+        // end, including any entries that arrived during the reconnect.
         scroll.removeAllViews();
         scroll.addView(replayBuffer);
         transcript = replayBuffer;
         replayBuffer = null;
-        scroll.post(() -> {
-            if (wasAtBottom) scroll.fullScroll(View.FOCUS_DOWN);
-            else scroll.scrollTo(0, previousScrollY);
-            updateScrollButton();
-        });
     }
 
     private void handleMessage(String raw) {
@@ -1409,15 +1394,6 @@ public class SessionActivity extends Activity {
             return;
         }
         String type = msg.optString("type", "");
-        boolean changesTranscript = switch (type) {
-            case "input", "output", "tool_use", "approval_request", "approval_response",
-                    "question", "question_response", "bash_input", "bash_output", "error" -> true;
-            default -> false;
-        };
-        // Snapshot this before handling the event. Content growth changes the
-        // answer, but should only follow that growth when the reader was already
-        // at the bottom. Reconnect replay mutates a detached transcript instead.
-        boolean keepAtBottom = changesTranscript && !awaitingReplay && isAtBottom();
 
         // Once any data has arrived, future (re)connects buffer their replay
         // off-screen rather than rendering into the live transcript.
@@ -1513,7 +1489,6 @@ public class SessionActivity extends Activity {
             default:
                 break;
         }
-        if (changesTranscript && !awaitingReplay) updateScrollAfterMutation(keepAtBottom);
     }
 
     /** Add a replay/live entry unless it is the echo of our own successful send. */
@@ -1536,21 +1511,6 @@ public class SessionActivity extends Activity {
         transcript.addView(v, rowParams());
     }
 
-    private boolean isAtBottom() {
-        return !scroll.canScrollVertically(1);
-    }
-
-    /** Apply sticky-bottom behavior after content has had a chance to lay out. */
-    private void updateScrollAfterMutation(boolean keepAtBottom) {
-        scroll.post(() -> {
-            if (keepAtBottom) scroll.fullScroll(View.FOCUS_DOWN);
-            updateScrollButton();
-        });
-    }
-
-    private void scrollToBottom() {
-        updateScrollAfterMutation(true);
-    }
 
     /** Show the floating down arrow only while the transcript can scroll further. */
     private void updateScrollButton() {
@@ -1823,6 +1783,8 @@ public class SessionActivity extends Activity {
         body.setVisibility(View.GONE);
 
         head.setOnClickListener(v -> {
+            // Keep the tapped header in place rather than following the bottom.
+            scroll.release();
             boolean open = body.getVisibility() == View.VISIBLE;
             body.setVisibility(open ? View.GONE : View.VISIBLE);
             caret.setText(open ? "▸" : "▾");
@@ -2268,6 +2230,7 @@ public class SessionActivity extends Activity {
         raw.setVisibility(View.GONE);
 
         toggle.setOnClickListener(v -> {
+            scroll.release();
             boolean open = raw.getVisibility() == View.VISIBLE;
             raw.setVisibility(open ? View.GONE : View.VISIBLE);
             toggle.setText(open ? "▸ action JSON" : "▾ action JSON");
