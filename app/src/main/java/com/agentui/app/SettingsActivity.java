@@ -124,6 +124,9 @@ public class SettingsActivity extends Activity {
         form.addView(label("Server token"));
         tokenField = field(prefs.token(), "Paste server token",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD, true);
+        // field() calls setSingleLine after setInputType, which replaces the password mask.
+        tokenField.setTransformationMethod(
+                android.text.method.PasswordTransformationMethod.getInstance());
         tokenField.setSaveEnabled(false);
         tokenField.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         form.addView(tokenField);
