@@ -1,9 +1,9 @@
-FROM fedora:42
+FROM fedora:44
 
 ARG ANDROID_CMDLINE_TOOLS_VERSION=14742923
 ARG ANDROID_API=36
 ARG ANDROID_BUILD_TOOLS=36.0.0
-ARG GRADLE_VERSION=8.10.2
+ARG GRADLE_VERSION=9.8.0
 
 ENV ANDROID_HOME=/opt/android-sdk
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
@@ -12,7 +12,7 @@ ENV PATH=${GRADLE_HOME}/bin:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_H
 
 RUN dnf install -y --setopt=install_weak_deps=False \
         findutils \
-        java-21-openjdk-devel \
+        java-25-openjdk-devel \
         unzip \
         wget \
         which \
