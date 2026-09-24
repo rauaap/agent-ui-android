@@ -1,10 +1,10 @@
 IMAGE ?= android-builder
 PODMAN ?= podman
 GRADLE_CACHE ?= android-gradle-cache
-# Shared release keystore + passwords for all apps; never inside a repo.
+# Shared release keystore + password for all apps; never inside a repo.
 SIGNING_DIR ?= $(HOME)/.android-signing
 
-RUN_ANDROID = $(PODMAN) run --rm --userns=keep-id $(PODMAN_ARGS) \
+RUN_ANDROID = $(PODMAN) run --rm --userns=keep-id \
 	-e HOME=/gradle-cache \
 	-e JAVA_TOOL_OPTIONS=-Duser.home=/gradle-cache \
 	-e GRADLE_USER_HOME=/gradle-cache \
@@ -22,7 +22,13 @@ debug: image
 	$(RUN_ANDROID) gradle --no-daemon assembleDebug
 
 release: image
-	$(RUN_ANDROID) scripts/release.sh
+	$(RUN_ANDROID) scripts/release.sh build
+	$(RUN_OFFLINE) \
+		-v "$(SIGNING_DIR):/signing:ro,Z" \
+		-v "$(CURDIR)/build/release/unsigned:/in:ro,Z" \
+		-v "$(CURDIR)/build/release/signed:/out:Z" \
+		$(IMAGE) bash -s < scripts/sign-apk.sh
+	$(RUN_ANDROID) scripts/release.sh finish
 
 test: image
 	$(RUN_ANDROID) gradle --no-daemon testDebugUnitTest
@@ -42,13 +48,15 @@ install:
 # Release signing and versioning; see RELEASING.md.
 .PHONY: signing-key release-init
 
-release: PODMAN_ARGS = -v "$(SIGNING_DIR):/signing:ro,z"
+# The signing key is only ever mounted into this offline container, which gets
+# no repo, no Gradle cache and no network. Scripts are fed on stdin.
+RUN_OFFLINE = $(PODMAN) run --rm -i --userns=keep-id --network=none
+
 release: check-signing
 
-signing-key: PODMAN_ARGS = -it -v "$(SIGNING_DIR):/signing:z"
 signing-key: image
 	mkdir -p -m 700 "$(SIGNING_DIR)"
-	$(RUN_ANDROID) scripts/signing-key.sh
+	$(RUN_OFFLINE) -v "$(SIGNING_DIR):/signing:Z" $(IMAGE) bash -s < scripts/signing-key.sh
 
 release-init:
 	@case "$(LAST)" in ''|*[!0-9]*) echo "usage: make release-init LAST=<last released versionCode, 0 for a new app>" >&2; exit 1;; esac

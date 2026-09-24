@@ -32,13 +32,35 @@ All personal apps share **one** release keystore, stored outside every repo in
 ~/.android-signing/signing.properties    keystore path + password (mode 600)
 ```
 
-`make release` mounts that directory read-only into the build container. If it
-is missing, the release fails with an error instead of producing an unsigned
-APK; so does running `assembleRelease` any other way.
+The key never enters the Gradle build. `make release` runs in three steps:
 
-The password is typed interactively once, when the key is created, and is then
-kept in `signing.properties` so releases need no prompt. Never commit this
-directory, paste its contents anywhere, or put it on the APK server.
+1. **Build** (normal container, network on): Gradle builds an *unsigned* APK.
+   The signing directory is not mounted, so no build script, plugin or
+   dependency can read the key.
+2. **Sign** (separate container, `--network=none`): only the signing
+   directory (read-only), the unsigned APK (read-only) and an output directory
+   are mounted — not the repo or the Gradle cache. It zipaligns and signs with
+   `apksigner`.
+3. **Finish** (normal container): checks the signature and certificate, saves
+   the APK to `dist/` and advances the counter.
+
+If the signing directory is missing, `make release` stops before building.
+Running `assembleRelease` any other way only produces
+`app-release-unsigned.apk`, which Android refuses to install.
+
+The keystore password is random and kept in `signing.properties`, so releases
+never prompt. It adds little on its own — anyone who can read the directory has
+both — so the real protection is the directory's permissions and an encrypted
+backup. Never commit this directory, paste its contents anywhere, or put it on
+the APK server.
+
+### Certificate check
+
+The first release of an app writes the signing certificate's SHA-256
+fingerprint to `release-cert.sha256`. **Commit that file** (the fingerprint is
+public). Every later release fails if the APK was signed with any other
+certificate, so a wrong or regenerated key is caught at build time instead of
+when the phone refuses the update.
 
 ## First-time setup (once per machine)
 
@@ -46,9 +68,9 @@ directory, paste its contents anywhere, or put it on the APK server.
 make signing-key
 ```
 
-Prompts (hidden input) for a new password, then creates the keystore and
-`signing.properties` and prints the certificate's SHA-256 fingerprint. It
-refuses to run if a key already exists. **Back it up right away** (below).
+Creates the keystore with a random password, writes `signing.properties`, and
+prints the certificate's SHA-256 fingerprint. It refuses to run if a key
+already exists. **Back it up right away** (below).
 
 On a new machine, restore the backup to `~/.android-signing/` instead — never
 generate a second key.
@@ -65,7 +87,8 @@ generate a second key.
    If the app has already been released or installed, use the highest
    versionCode ever published (or installed) instead, so versions never go
    backwards.
-3. `make release`, then copy the APK from `dist/` to your HTTP server.
+3. `make release`, then copy the APK from `dist/` to your HTTP server, and
+   commit the newly created `release-cert.sha256`.
 
 Each app has its own `applicationId` and its own counter; only the key is
 shared.
@@ -92,7 +115,8 @@ Back up, encrypted and somewhere other than the build machine:
   tar -C ~ -czf - .android-signing | gpg -c > android-signing.tar.gz.gpg
   ```
 
-  Keep the password somewhere separate as well (e.g. a password manager).
+  The keystore password is inside the backup; you only need to remember the
+  `gpg` passphrase (e.g. in a password manager).
 - **Each app's `.last-version-code`** — nice to have. It is recoverable: the
   highest versionCode released is the number at the end of the newest APK name
   on the server.
