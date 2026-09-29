@@ -61,6 +61,51 @@ public class CanonicalActionTest {
         assertEquals("prod", other.detail().getString("target"));
     }
 
+    @Test public void hostCommandLabelsEveryArgumentIncludingTimeout() throws Exception {
+        CanonicalAction.HostCommand host = action("{kind:'other',name:'Execute outside sandbox',"
+                + "arguments:{command:'podman build .',reason:'Needs podman',timeout_seconds:600,cwd:'/w'}}")
+                .hostCommand();
+        assertNotNull(host);
+        assertEquals("podman build .", host.command);
+        assertEquals("Needs podman", host.reason);
+        assertEquals("/w", host.cwd);
+        assertEquals("10 min", host.timeout);
+
+        CanonicalAction.HostCommand fractional = action("{kind:'other',name:'Execute outside sandbox',"
+                + "arguments:{command:'ls',reason:'r',timeout_seconds:0.5,cwd:'/w'}}").hostCommand();
+        assertEquals("0.5 s", fractional.timeout);
+
+        CanonicalAction.HostCommand older = action("{kind:'other',name:'Execute outside sandbox',"
+                + "arguments:{command:'ls',reason:'r',cwd:'/w'}}").hostCommand();
+        assertEquals("server default", older.timeout);
+    }
+
+    @Test public void hostCommandFallsBackToRawJsonWhenNotUnderstood() throws Exception {
+        String[] values = {
+                "{kind:'other',name:'Deploy',arguments:{command:'ls',timeout_seconds:1}}",
+                "{kind:'other',name:'Execute outside sandbox',arguments:{command:'ls',timeout_seconds:'120'}}",
+                "{kind:'other',name:'Execute outside sandbox',arguments:{command:'ls',timeout_seconds:0}}",
+                "{kind:'other',name:'Execute outside sandbox',arguments:{command:'ls',timeout_seconds:-5}}",
+                "{kind:'other',name:'Execute outside sandbox',arguments:{command:'ls',env:'X=1'}}",
+                "{kind:'other',name:'Execute outside sandbox',arguments:{reason:'r'}}",
+                "{kind:'command',command:'ls'}"
+        };
+        for (String value : values) assertNull(value, action(value).hostCommand());
+    }
+
+    @Test public void formatsDurations() {
+        assertEquals("< 0.001 s", CanonicalAction.duration(0.0001));
+        assertEquals("0.5 s", CanonicalAction.duration(0.5));
+        assertEquals("45 s", CanonicalAction.duration(45));
+        assertEquals("1 min", CanonicalAction.duration(59.9999));
+        assertEquals("2 min", CanonicalAction.duration(120));
+        assertEquals("1 min 30.25 s", CanonicalAction.duration(90.25));
+        assertEquals("1 h", CanonicalAction.duration(3600));
+        assertEquals("1 h 30 min", CanonicalAction.duration(5400));
+        assertEquals("2 h 5 s", CanonicalAction.duration(7205));
+        assertEquals("100000000 h", CanonicalAction.duration(3.6e11));
+    }
+
     @Test public void validatesApprovalOptionsIncludingEmptyFallback() throws Exception {
         assertTrue(CanonicalAction.validOptions(new JSONArray("[]")));
         assertTrue(CanonicalAction.validOptions(new JSONArray(

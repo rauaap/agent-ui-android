@@ -3,6 +3,8 @@ package com.agentui.app;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -125,6 +127,73 @@ final class CanonicalAction {
 
     JSONObject detail() {
         return "other".equals(kind) ? value.optJSONObject("arguments") : value;
+    }
+
+    /** The server's approval for its {@code bypass_sandbox} host tool. */
+    static final String HOST_COMMAND = "Execute outside sandbox";
+
+    /** A host command request's arguments, labeled for the approval card. */
+    static final class HostCommand {
+        final String command;
+        final String reason;
+        final String cwd;
+        /** A human-readable duration, never empty. */
+        final String timeout;
+
+        HostCommand(String command, String reason, String cwd, String timeout) {
+            this.command = command;
+            this.reason = reason;
+            this.cwd = cwd;
+            this.timeout = timeout;
+        }
+    }
+
+    /**
+     * This action as a host command, or null when it isn't one or its arguments
+     * aren't fully understood, so the caller shows them as raw JSON instead of
+     * silently dropping any.
+     */
+    HostCommand hostCommand() {
+        if (!"other".equals(kind) || !HOST_COMMAND.equals(value.optString("name"))) return null;
+        JSONObject args = value.optJSONObject("arguments");
+        if (args == null || !fields(args, "command", "reason", "timeout_seconds", "cwd")
+                || requiredString(args, "command", false) == null
+                || !optionalString(args, "reason") || !optionalString(args, "cwd")
+                || !optionalNumber(args, "timeout_seconds", false, true)) return null;
+        String timeout;
+        if (args.has("timeout_seconds")) {
+            double seconds = ((Number) args.opt("timeout_seconds")).doubleValue();
+            if (seconds <= 0) return null;
+            timeout = duration(seconds);
+        } else {
+            // Servers before timeout_seconds applied their own configured limit.
+            timeout = "server default";
+        }
+        return new HostCommand(args.optString("command"), args.optString("reason"),
+                args.optString("cwd"), timeout);
+    }
+
+    /** {@code 0.5 s}, {@code 45 s}, {@code 10 min}, {@code 1 h 30 min}. */
+    static String duration(double seconds) {
+        if (seconds > 0 && seconds < 0.0005) return "< 0.001 s";
+        // Round first so 59.9999 reads "1 min" rather than "60 s".
+        seconds = new BigDecimal(seconds).setScale(3, RoundingMode.HALF_UP).doubleValue();
+        if (seconds < 60) return plain(seconds) + " s";
+        double hours = Math.floor(seconds / 3600);
+        double minutes = Math.floor((seconds - hours * 3600) / 60);
+        double rest = seconds - hours * 3600 - minutes * 60;
+        StringBuilder out = new StringBuilder();
+        if (hours > 0) out.append(plain(hours)).append(" h");
+        if (minutes > 0) out.append(out.length() > 0 ? " " : "").append(plain(minutes)).append(" min");
+        String restText = plain(rest);
+        if (!"0".equals(restText)) out.append(out.length() > 0 ? " " : "").append(restText).append(" s");
+        return out.toString();
+    }
+
+    /** At most three decimals, without trailing zeros or an exponent. */
+    private static String plain(double number) {
+        return new BigDecimal(number).setScale(3, RoundingMode.HALF_UP)
+                .stripTrailingZeros().toPlainString();
     }
 
     private static boolean validEdits(JSONArray edits) {

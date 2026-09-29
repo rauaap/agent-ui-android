@@ -11,7 +11,8 @@ import org.json.JSONObject;
 
 /**
  * Builds human-readable views for canonical tool actions: git-style diffs for
- * file changes and a terminal block for commands. Other action kinds return
+ * file changes and a terminal block for commands, including host commands
+ * run outside the sandbox. Other action kinds return
  * {@code null} so the caller can show their canonical JSON.
  */
 final class ToolFormat {
@@ -33,6 +34,9 @@ final class ToolFormat {
                 return diff(ctx, action);
             case "command":
                 return command(ctx, action.json());
+            case "other":
+                CanonicalAction.HostCommand host = action.hostCommand();
+                return host == null ? null : hostCommand(ctx, host);
             default:
                 return null;
         }
@@ -109,5 +113,37 @@ final class ToolFormat {
             sb.append(lines[i]);
         }
         return Widgets.mono(ctx, sb, Theme.INK, 13f);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* host commands → terminal block plus labeled arguments            */
+    /* ---------------------------------------------------------------- */
+
+    private static View hostCommand(Context ctx, CanonicalAction.HostCommand host) {
+        SpannableStringBuilder sb = new SpannableStringBuilder();
+        String[] lines = host.command.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) sb.append('\n');
+            int start = sb.length();
+            sb.append(i == 0 ? "$ " : "  ");
+            sb.setSpan(new ForegroundColorSpan(Theme.ACCENT_STRONG), start, sb.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.append(lines[i]);
+        }
+        sb.append('\n');
+        if (!host.reason.isEmpty()) label(sb, "Reason", host.reason);
+        if (!host.cwd.isEmpty()) label(sb, "Directory", host.cwd);
+        // Always shown: a long timeout is part of what is being approved.
+        label(sb, "Timeout", host.timeout);
+        return Widgets.mono(ctx, sb, Theme.INK, 13f);
+    }
+
+    private static void label(SpannableStringBuilder sb, String name, String value) {
+        sb.append('\n');
+        int start = sb.length();
+        sb.append(name).append(": ");
+        sb.setSpan(new ForegroundColorSpan(CTX), start, sb.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sb.append(value);
     }
 }
