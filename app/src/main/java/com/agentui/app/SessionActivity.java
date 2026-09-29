@@ -181,10 +181,6 @@ public class SessionActivity extends Activity {
     // pick — tracked separately from approvals, which gate whether a tool runs
     private View pendingQuestionCard;
     private String pendingQuestionId;
-    // The most recently rendered canonical tool call. Only an immediately
-    // eligible approval carrying this exact opaque call ID may replace it.
-    private View lastToolCard;
-    private String lastToolCallId;
     // The bash card still waiting for its output. A command runs alongside the
     // agent, so its result can arrive several messages after the echo that
     // opened the card — the card is rebuilt in place rather than appended.
@@ -1313,7 +1309,6 @@ public class SessionActivity extends Activity {
             pendingQuestionId = null;
             pendingBashCard = null;
             pendingBashCommand = null;
-            clearLastTool();
             // The replay redraws every sender row; the old ones are discarded.
             directoryViews.clear();
         }
@@ -1430,7 +1425,6 @@ public class SessionActivity extends Activity {
                 break;
             case "input":
                 agentBubble = null;
-                clearLastTool();
                 String prompt = msg.optString("text", "");
                 InterAgent.Source source = InterAgent.source(msg);
                 if (source.isUser()) {
@@ -1443,7 +1437,6 @@ public class SessionActivity extends Activity {
                 }
                 break;
             case "output":
-                clearLastTool();
                 addAgentOutput(msg.optString("text", ""));
                 break;
             case "tool_use":
@@ -1460,7 +1453,6 @@ public class SessionActivity extends Activity {
                 break;
             case "question":
                 agentBubble = null;
-                clearLastTool();
                 addQuestionRequest(msg);
                 break;
             case "question_response":
@@ -1469,7 +1461,6 @@ public class SessionActivity extends Activity {
             // Bash mode: the echo opens a card, the result fills it in.
             case "bash_input":
                 agentBubble = null;
-                clearLastTool();
                 String command = msg.optString("command", "");
                 acceptHistoryEcho(MessageHistory.commandEntry(command));
                 addBashCommand(command);
@@ -1479,11 +1470,9 @@ public class SessionActivity extends Activity {
                 break;
             case "done":
                 agentBubble = null;
-                clearLastTool();
                 break;
             case "error":
                 agentBubble = null;
-                clearLastTool();
                 addError(msg.optString("message", "Unknown error"));
                 break;
             default:
@@ -1509,6 +1498,16 @@ public class SessionActivity extends Activity {
 
     private void append(View v) {
         transcript.addView(v, rowParams());
+    }
+
+    /**
+     * Put a row at {@code index}, or append it when that's -1. The transcript
+     * follows its bottom on every layout, so a row landing above the last one
+     * still keeps a reader at the bottom there.
+     */
+    private void place(View v, int index) {
+        if (index < 0) append(v);
+        else transcript.addView(v, index, rowParams());
     }
 
 
@@ -1735,7 +1734,6 @@ public class SessionActivity extends Activity {
         CanonicalAction action = CanonicalAction.parse(event.optJSONObject("action"));
         String callId = strictString(event, "call_id");
         if (action == null || callId == null || callId.isEmpty()) {
-            clearLastTool();
             addUnsupportedToolEvent(event, !event.has("action"));
             return;
         }
@@ -1800,10 +1798,9 @@ public class SessionActivity extends Activity {
             wrap.addView(message, mLp);
         }
         wrap.addView(body);
+        // Found again by call id when this call's approval arrives.
+        wrap.setTag(new ToolCards.Tag(callId));
         append(wrap);
-
-        lastToolCard = wrap;
-        lastToolCallId = callId;
     }
 
     private void addUnsupportedToolEvent(JSONObject event, boolean legacy) {
@@ -1819,11 +1816,6 @@ public class SessionActivity extends Activity {
         Widgets.margins(raw, 0, Theme.dp(this, 8), 0, 0);
         card.addView(raw);
         append(card);
-    }
-
-    private void clearLastTool() {
-        lastToolCard = null;
-        lastToolCallId = null;
     }
 
     /* ---------------------------------------------------------------- */
@@ -1854,7 +1846,6 @@ public class SessionActivity extends Activity {
         // No card to fill in — a replay that began past the echo, or a command
         // another client started before we connected. It stands on its own.
         agentBubble = null;
-        clearLastTool();
         append(bashCard(command, result));
     }
 
@@ -1981,7 +1972,6 @@ public class SessionActivity extends Activity {
                 || Boolean.TRUE.equals(msg.opt("auto_approved"));
         if (id == null || id.isEmpty() || callId == null || callId.isEmpty()
                 || action == null || !CanonicalAction.validOptions(options) || !autoFieldValid) {
-            clearLastTool();
             addUnsupportedToolEvent(msg, !msg.has("action"));
             return;
         }
@@ -1990,12 +1980,14 @@ public class SessionActivity extends Activity {
         final boolean auto = msg.has("auto_approved");
         final int accent = auto ? Theme.RUNNING : Theme.AWAITING;
 
-        // Replace only the immediately eligible call with the exact same opaque
-        // invocation ID. The approval's repeated action renders independently.
-        if (lastToolCard != null && callId.equals(lastToolCallId)) {
-            transcript.removeView(lastToolCard);
-        }
-        clearLastTool();
+        // The approval takes the place of the tool card with the same opaque
+        // invocation ID, wherever it sits: parallel calls put their sibling
+        // cards, and possibly earlier approvals, in between. The approval's
+        // repeated action renders independently. With no such card it's
+        // appended.
+        final int toolIndex = ToolCards.indexOf(
+                i -> transcript.getChildAt(i).getTag(), transcript.getChildCount(), callId);
+        if (toolIndex >= 0) transcript.removeViewAt(toolIndex);
 
         LinearLayout card = Widgets.column(this);
         if (auto) {
@@ -2088,7 +2080,7 @@ public class SessionActivity extends Activity {
             LinearLayout.LayoutParams mp = lp(WRAP, WRAP);
             mp.topMargin = Theme.dp(this, 10);
             card.addView(marker, mp);
-            append(card);
+            place(card, toolIndex);
             // Not pending: the paired approval_response (auto) is a no-op since
             // we never set pendingApprovalId.
             return;
@@ -2098,7 +2090,7 @@ public class SessionActivity extends Activity {
         card.addView(buttons);
         card.setTag(buttons); // remember the button container for finalize()
 
-        append(card);
+        place(card, toolIndex);
         pendingApprovalCard = card;
         pendingApprovalId = id;
     }
