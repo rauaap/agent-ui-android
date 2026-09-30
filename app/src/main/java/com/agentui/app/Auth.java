@@ -28,7 +28,9 @@ public final class Auth extends Application implements Application.ActivityLifec
     }
 
     static boolean ready() {
-        return instance != null && !instance.rejected && !instance.settingsOpen
+        // Opening Settings does not invalidate the saved token. settingsOpen
+        // only prevents duplicate authentication prompts, not server requests.
+        return instance != null && !instance.rejected
                 && !new Prefs(instance).token().isEmpty();
     }
 
