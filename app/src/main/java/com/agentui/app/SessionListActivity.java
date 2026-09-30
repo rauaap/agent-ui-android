@@ -539,6 +539,7 @@ public class SessionListActivity extends Activity {
         // meta
         String model = Agent.modelLabel(agents, s.agent, s.model);
         String meta = formatAgent(s.agent) + (model != null ? "  ·  " + model : "")
+                + (s.reasoningLevel != null ? "  ·  " + s.reasoningLevel : "")
                 + "  ·  " + formatTime(s.lastActiveAt);
         TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
         Widgets.margins(metaView, 0, Theme.dp(this, elsewhere ? 8 : 10), 0, 0);
@@ -731,6 +732,46 @@ public class SessionListActivity extends Activity {
         // that agent's first, since model ids mean nothing across harnesses.
         // Null only while the agent has no usable catalog, which blocks Create.
         final String[] modelId = {null};
+        // ---- reasoning ----
+        // The chosen model's own levels, behind a "Default" that sends null and
+        // leaves the choice to the harness. Any change of model starts over
+        // from Default; hidden for a model with no levels.
+        final String[] reasoningLevel = {null};
+        LinearLayout reasoningSection = Widgets.column(this);
+        TextView reasoningPicker = selector(Model.reasoningLabel(null));
+        reasoningSection.addView(spacer(14));
+        reasoningSection.addView(fieldLabel("Reasoning"));
+        reasoningSection.addView(reasoningPicker);
+        final Runnable showReasoning = () -> {
+            Agent chosen = choices.get(agentIdx[0]);
+            Model m = modelId[0] == null ? null : chosen.model(modelId[0]);
+            reasoningLevel[0] = null;
+            reasoningPicker.setText(Model.reasoningLabel(null));
+            if (m == null || m.reasoningLevels.isEmpty()) {
+                reasoningSection.setVisibility(View.GONE);
+                reasoningPicker.setOnClickListener(null);
+                return;
+            }
+            reasoningSection.setVisibility(View.VISIBLE);
+            reasoningPicker.setOnClickListener(v -> {
+                CharSequence[] labels = new CharSequence[m.reasoningLevels.size() + 1];
+                labels[0] = Model.reasoningLabel(null);
+                int checked = 0;
+                for (int i = 0; i < m.reasoningLevels.size(); i++) {
+                    labels[i + 1] = m.reasoningLevels.get(i);
+                    if (m.reasoningLevels.get(i).equals(reasoningLevel[0])) checked = i + 1;
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle("Reasoning")
+                        .setSingleChoiceItems(labels, checked, (d, which) -> {
+                            reasoningLevel[0] = which == 0 ? null : m.reasoningLevels.get(which - 1);
+                            reasoningPicker.setText(labels[which]);
+                            d.dismiss();
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            });
+        };
         // Create is enabled only with a model chosen and no request in flight.
         final Button[] create = {null};
         final boolean[] creating = {false};
@@ -740,17 +781,19 @@ public class SessionListActivity extends Activity {
         TextView modelPicker = selector("");
         TextView modelHint = Widgets.text(this, "", Theme.MUTED, 12.5f, false);
         Widgets.margins(modelHint, 0, Theme.dp(this, 7), 0, 0);
-        showModelChoices(choices.get(agentIdx[0]), modelPicker, modelHint, modelId);
+        showModelChoices(choices.get(agentIdx[0]), modelPicker, modelHint, modelId, showReasoning);
 
         TextView agent = selector(choices.get(agentIdx[0]).name);
         agent.setOnClickListener(av -> new AlertDialog.Builder(this)
                 .setTitle("Agent")
                 .setSingleChoiceItems(agentLabels, agentIdx[0], (d, which) -> {
-                    if (which != agentIdx[0]) {
-                        showModelChoices(choices.get(which), modelPicker, modelHint, modelId);
+                    int previous = agentIdx[0];
+                    agentIdx[0] = which;
+                    if (which != previous) {
+                        showModelChoices(choices.get(which), modelPicker, modelHint, modelId,
+                                showReasoning);
                         refreshCreate.run();
                     }
-                    agentIdx[0] = which;
                     agent.setText(agentLabels[which]);
                     sandboxSection.setVisibility(Agent.supportsSandbox(choices.get(which).id) ? View.VISIBLE : View.GONE);
                     d.dismiss();
@@ -764,6 +807,7 @@ public class SessionListActivity extends Activity {
         content.addView(fieldLabel("Model"));
         content.addView(modelPicker);
         content.addView(modelHint);
+        content.addView(reasoningSection);
 
         // ---- worktree ----
         // Only offered for a project the server reports as a git repo: anywhere
@@ -812,7 +856,8 @@ public class SessionListActivity extends Activity {
 
                 creating[0] = true;
                 refreshCreate.run();
-                api.createSession(name, dir, choices.get(agentIdx[0]).id, modelId[0], worktreeId[0],
+                api.createSession(name, dir, choices.get(agentIdx[0]).id, modelId[0],
+                        reasoningLevel[0], worktreeId[0],
                         Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? sandbox.isChecked() : null,
                         new Api.StatusCb<Session>() {
                             @Override public void onResult(Session session) {
@@ -858,11 +903,14 @@ public class SessionListActivity extends Activity {
      * Point the model picker at one agent's catalog and select its first model.
      * Without a usable catalog nothing is selected, the picker is disabled and
      * the reason is shown underneath; the caller then keeps Create disabled.
+     * {@code onModel} runs after every change of {@code modelId}.
      */
-    private void showModelChoices(Agent agent, TextView picker, TextView hint, String[] modelId) {
+    private void showModelChoices(Agent agent, TextView picker, TextView hint, String[] modelId,
+                                  Runnable onModel) {
         String unavailable = agent.unavailable();
         if (unavailable != null) {
             modelId[0] = null;
+            onModel.run();
             picker.setText("Unavailable");
             picker.setEnabled(false);
             picker.setTextColor(Theme.MUTED);
@@ -873,6 +921,7 @@ public class SessionListActivity extends Activity {
         }
         List<Model> models = agent.models;
         modelId[0] = models.get(0).id;
+        onModel.run();
         picker.setText(models.get(0).name);
         picker.setEnabled(true);
         picker.setTextColor(Theme.INK);
@@ -889,7 +938,10 @@ public class SessionListActivity extends Activity {
             new AlertDialog.Builder(this)
                     .setTitle("Model")
                     .setSingleChoiceItems(labels, checked, (d, which) -> {
-                        modelId[0] = models.get(which).id;
+                        if (!models.get(which).id.equals(modelId[0])) {
+                            modelId[0] = models.get(which).id;
+                            onModel.run();
+                        }
                         picker.setText(labels[which]);
                         d.dismiss();
                     })

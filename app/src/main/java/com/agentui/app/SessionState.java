@@ -23,8 +23,10 @@ final class SessionState {
     static long snapshot() { return clock; }
     long settingsRevision;
     long statusRevision;
+    long reasoningRevision;
     private JSONObject liveSettings;
     private String liveStatus;
+    private String liveReasoningLevel;
     private final ArrayList<Runnable> listeners = new ArrayList<>();
     void listen(Runnable listener) { listeners.add(listener); }
     void unlisten(Runnable listener) { listeners.remove(listener); }
@@ -46,7 +48,14 @@ final class SessionState {
         if (session != null) session.status = status;
         changed();
     }
+    void reasoningLevel(String level) {
+        liveReasoningLevel = level;
+        reasoningRevision = ++clock;
+        if (session != null) session.reasoningLevel = level;
+        changed();
+    }
     void accept(Session value, long started) {
+        if (reasoningRevision > started) value.reasoningLevel = liveReasoningLevel;
         if (settingsRevision > started && liveSettings != null) applySettings(value, liveSettings);
         if (statusRevision > started && liveStatus != null) value.status = liveStatus;
         session = value;
@@ -63,6 +72,7 @@ final class SessionState {
             settings.put("sandbox", session.sandbox);
         } catch (Exception ignored) {}
         settings(settings);
+        reasoningLevel(session.reasoningLevel);
     }
     static void applySettings(Session session, JSONObject msg) {
         session.autoApproveWrite = msg.optBoolean("auto_approve_write", session.autoApproveWrite);

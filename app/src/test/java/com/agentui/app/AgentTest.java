@@ -25,7 +25,8 @@ public class AgentTest {
             + "{\"id\":\"claude-code\",\"name\":\"Claude Code\",\"default\":true,"
             + "\"models\":[],\"models_error\":\"Unavailable\"},"
             + "{\"id\":\"pi\",\"name\":\"Pi\",\"default\":false,"
-            + "\"models\":[{\"id\":\"p/m\",\"name\":\"M\"},{\"id\":\"p/a\",\"name\":\"A\"}],"
+            + "\"models\":[{\"id\":\"p/m\",\"name\":\"M\",\"reasoning_levels\":[\"off\",\"high\"]},"
+            + "{\"id\":\"p/a\",\"name\":\"A\",\"reasoning_levels\":[]}],"
             + "\"models_error\":null}"
             + "]";
 
@@ -56,6 +57,10 @@ public class AgentTest {
         assertEquals("p/m", pi.models.get(0).id);
         assertEquals("M", pi.models.get(0).name);
         assertEquals("p/a", pi.models.get(1).id);
+        assertEquals(Arrays.asList("off", "high"), pi.models.get(0).reasoningLevels);
+        assertTrue(pi.models.get(1).reasoningLevels.isEmpty());
+        assertEquals("M", pi.model("p/m").name);
+        assertNull(pi.model("p/gone"));
     }
 
     @Test

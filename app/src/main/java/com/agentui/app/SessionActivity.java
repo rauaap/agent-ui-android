@@ -1419,6 +1419,9 @@ public class SessionActivity extends Activity {
                 autoApproveInterAgent = msg.optBoolean("auto_approve_inter_agent_communication",
                         autoApproveInterAgent);
                 break;
+            case "reasoning_level":
+                SessionState.get(api, sessionId).reasoningLevel(msg.optString("reasoning_level"));
+                break;
             case "input":
                 agentBubble = null;
                 String prompt = msg.optString("text", "");

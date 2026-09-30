@@ -21,7 +21,8 @@ import static com.agentui.app.Widgets.lp;
 
 /**
  * Per-session settings, reached from the gear in the session header. Hosts the
- * notification opt-in (formerly the bell toggle), renaming the session via
+ * notification opt-in (formerly the bell toggle), the reasoning level, renaming
+ * the session via
  * {@code PATCH /sessions/{id}}, and archiving it — the same route, one more
  * optional field.
  *
@@ -68,6 +69,11 @@ public class SessionSettingsActivity extends Activity {
     private Switch sandboxSwitch;
     private LinearLayout sandboxRow;
     private TextView sandboxHint;
+    private TextView reasoningPicker;
+    private TextView reasoningHint;
+    private boolean reasoningSaving;
+    /** The server's catalog, for the session model's reasoning levels; empty until it lands. */
+    private final java.util.List<Agent> agents = new java.util.ArrayList<>();
     private SessionState state;
     private final Runnable stateListener = this::renderState;
 
@@ -106,6 +112,14 @@ public class SessionSettingsActivity extends Activity {
             }
             @Override public void onError(String message) { toast(message); renderState(); }
         });
+        api.listAgents(new Api.Cb<java.util.List<Agent>>() {
+            @Override public void onResult(java.util.List<Agent> list) {
+                agents.clear();
+                agents.addAll(list);
+                renderState();
+            }
+            @Override public void onError(String message) { toast(message); }
+        });
     }
 
     @Override protected void onStop() {
@@ -127,6 +141,7 @@ public class SessionSettingsActivity extends Activity {
         writeSwitch.setEnabled(!state.saving && !state.approvalSaving);
         commandSwitch.setEnabled(!state.saving && !state.approvalSaving);
         interAgentSwitch.setEnabled(!state.saving && !state.approvalSaving);
+        renderReasoning(s);
         if (s != null) {
             status = s.status;
             autoApproveWrite = s.autoApproveWrite;
@@ -164,6 +179,64 @@ public class SessionSettingsActivity extends Activity {
                     state.changed();
                     finish();
                 }
+            }
+        });
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* reasoning                                                        */
+    /* ---------------------------------------------------------------- */
+
+    /** The session model's catalog entry, or null until both are known or when unlisted. */
+    private Model sessionModel(Session s) {
+        if (s == null || s.model == null) return null;
+        Agent a = Agent.find(agents, s.agent);
+        return a == null ? null : a.model(s.model);
+    }
+
+    private void renderReasoning(Session s) {
+        reasoningPicker.setText(s == null ? "…" : Model.reasoningLabel(s.reasoningLevel));
+        Model m = sessionModel(s);
+        boolean choosable = m != null && !m.reasoningLevels.isEmpty();
+        reasoningPicker.setEnabled(choosable && !reasoningSaving);
+        reasoningPicker.setTextColor(choosable ? Theme.INK : Theme.MUTED);
+        reasoningHint.setText(s == null || (m == null && s.model != null && agents.isEmpty())
+                ? "Loading session settings…"
+                : choosable ? "Applies from the next turn. Default leaves it to the harness, "
+                        + "and a level once set cannot go back to it."
+                : m != null ? "This session's model offers no reasoning levels."
+                : "This session's model is not in the server's catalog.");
+    }
+
+    private void chooseReasoning() {
+        Session s = state.session;
+        Model m = sessionModel(s);
+        if (m == null || m.reasoningLevels.isEmpty() || reasoningSaving) return;
+        // Only real levels: a set level cannot be cleared back to Default.
+        final java.util.List<String> levels = m.reasoningLevels;
+        CharSequence[] labels = levels.toArray(new CharSequence[0]);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Reasoning")
+                .setSingleChoiceItems(labels, levels.indexOf(s.reasoningLevel), (d, which) -> {
+                    d.dismiss();
+                    if (!levels.get(which).equals(s.reasoningLevel)) applyReasoning(levels.get(which));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void applyReasoning(String level) {
+        reasoningSaving = true;
+        renderState();
+        api.setReasoningLevel(sessionId, level, new Api.Cb<Session>() {
+            @Override public void onResult(Session session) {
+                reasoningSaving = false;
+                renderState();
+            }
+            @Override public void onError(String message) {
+                reasoningSaving = false;
+                renderState();
+                toast("Couldn't update: " + message);
             }
         });
     }
@@ -217,6 +290,23 @@ public class SessionSettingsActivity extends Activity {
                         + "even when it isn't on screen.", Theme.MUTED, 12.5f, false);
         Widgets.margins(notifyHint, 0, Theme.dp(this, 7), 0, 0);
         form.addView(notifyHint);
+
+        // ---- reasoning ----
+        form.addView(spacer(28));
+        form.addView(section("Reasoning"));
+        form.addView(spacer(12));
+        reasoningPicker = Widgets.text(this, "…", Theme.INK, 15, false);
+        reasoningPicker.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
+        int rp = Theme.dp(this, 12);
+        reasoningPicker.setPadding(rp, 0, rp, 0);
+        reasoningPicker.setGravity(Gravity.CENTER_VERTICAL);
+        reasoningPicker.setMinimumHeight(Theme.dp(this, 44));
+        reasoningPicker.setLayoutParams(lp(MATCH, WRAP));
+        reasoningPicker.setOnClickListener(v -> chooseReasoning());
+        form.addView(reasoningPicker);
+        reasoningHint = Widgets.text(this, "", Theme.MUTED, 12.5f, false);
+        Widgets.margins(reasoningHint, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(reasoningHint);
 
         // ---- auto-approve ----
         form.addView(spacer(28));

@@ -35,6 +35,13 @@ final class Session {
      * session's life. Opaque, like the agent id.
      */
     String model;
+    /**
+     * One of the model's {@code reasoning_levels}, or null when the harness
+     * picks its own default. Changeable through {@code PATCH}, from the next
+     * turn, but never back to null. Mutable: the {@code reasoning_level}
+     * WebSocket event carries changes made on another device.
+     */
+    String reasoningLevel;
     String status;
     final String lastActiveAt;
     /**
@@ -110,6 +117,7 @@ final class Session {
         session.autoApproveInterAgent = o.optBoolean("auto_approve_inter_agent_communication", false);
         // A legacy session reports model: null; see archived_at above.
         session.model = o.isNull("model") ? null : o.optString("model", null);
+        session.reasoningLevel = o.isNull("reasoning_level") ? null : o.optString("reasoning_level");
         session.sandbox = o.opt("sandbox") instanceof Boolean ? (Boolean) o.opt("sandbox") : null;
         return session;
     }

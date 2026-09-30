@@ -66,6 +66,15 @@ Device smoke checks before release:
   that agent; other agents are unaffected. It never falls back to letting the
   harness choose. The model is fixed when the session is created, and session
   cards show it by its catalog name.
+- **Reasoning level** — below the model, the new-session dialog offers that
+  model's `reasoning_levels`, in the harness's own words and order, behind a
+  **Default** that sends `reasoning_level: null` and leaves the choice to the
+  harness. It resets to Default whenever the model changes, and is hidden for a
+  model with no levels. Session settings show the current level (Default when
+  null) and change it with `PATCH /sessions/{id}`, effective from the next turn;
+  only real levels are offered, since a set level cannot go back to Default.
+  Changes from other devices arrive as `reasoning_level` WebSocket events.
+  Session cards show a set level after the model.
 - **Git worktrees** — a worktree is a project's, not a session's: it is created
   and removed on its own, any number of sessions can run in one, and it outlives
   all of them. The new-session dialog picks between the project directory (the
@@ -196,7 +205,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WorktreeListActivity.java` | one project's worktrees: list / create / remove |
 | `WorktreeForm.java`        | the create-worktree dialog, shared by the picker and that list |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
-| `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, auto-approve toggles, archive |
+| `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, reasoning level, auto-approve toggles, archive |
 | `ProjectSettingsActivity.java` | per-project settings: sandbox paths, archive / unarchive |
 | `SettingsActivity.java`    | server address + projects directory form (persisted) + the way in to Archived |
 | `SandboxPathsActivity.java` | shared server/project sandbox-path editor with inheritance and atomic saves |

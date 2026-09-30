@@ -44,6 +44,12 @@ final class Agent {
         this.modelsError = modelsError;
     }
 
+    /** The catalog entry for a model id, or null when this agent does not list it. */
+    Model model(String modelId) {
+        for (Model m : models) if (m.id.equals(modelId)) return m;
+        return null;
+    }
+
     /** Execution support on current servers; an absent session field is still unknown. */
     static boolean supportsSandbox(String id) {
         return "pi".equals(id) || "claude-code".equals(id);
@@ -93,10 +99,8 @@ final class Agent {
     static String modelLabel(List<Agent> known, String agentId, String modelId) {
         if (modelId == null) return null;
         Agent a = find(known, agentId);
-        if (a != null) {
-            for (Model m : a.models) if (m.id.equals(modelId)) return m.name;
-        }
-        return modelId;
+        Model m = a == null ? null : a.model(modelId);
+        return m != null ? m.name : modelId;
     }
 
     /** Why no session can be created with this agent, or null when it has a model to choose. */

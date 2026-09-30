@@ -321,9 +321,13 @@ final class Api {
      * catalog: anything else is a 400, and a 503 means its discovery failed.
      * The app never leaves the choice to the harness. The model cannot be
      * changed later.
+     *
+     * <p>{@code reasoningLevel} is one of that model's {@code reasoning_levels},
+     * or null to leave it to the harness.
      */
     void createSession(String name, String projectPath, String agent, String model,
-                       String worktreeId, Boolean sandbox, Cb<Session> cb) {
+                       String reasoningLevel, String worktreeId, Boolean sandbox,
+                       Cb<Session> cb) {
         JSONObject payload = new JSONObject();
         try {
             payload.put("name", name);
@@ -331,6 +335,7 @@ final class Api {
             payload.put("working_dir", projectPath);
             payload.put("agent", agent);
             payload.put("model", model);
+            payload.put("reasoning_level", reasoningLevel == null ? JSONObject.NULL : reasoningLevel);
             if (sandbox != null) payload.put("sandbox", sandbox);
             // Omitted rather than sent as null for the plain case: the field is
             // optional, and an absent one reads the same to every server.
@@ -390,6 +395,19 @@ final class Api {
                 .url(prefs.httpBase() + "/sessions/" + id + "/detach-worktree")
                 .post(RequestBody.create(new byte[0], null))
                 .build();
+        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
+    }
+
+    /**
+     * Sets the reasoning level from the session model's {@code reasoning_levels},
+     * effective from the next turn. There is no clearing it back to the harness
+     * default.
+     */
+    void setReasoningLevel(String id, String level, Cb<Session> cb) {
+        JSONObject payload = new JSONObject();
+        try { payload.put("reasoning_level", level); } catch (Exception ignored) {}
+        Request req = new Request.Builder().url(prefs.httpBase() + "/sessions/" + id)
+                .patch(RequestBody.create(payload.toString(), JSON)).build();
         enqueue(req, cb, body -> Session.from(new JSONObject(body)));
     }
 
