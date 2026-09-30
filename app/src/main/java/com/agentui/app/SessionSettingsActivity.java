@@ -69,6 +69,8 @@ public class SessionSettingsActivity extends Activity {
     private Switch sandboxSwitch;
     private LinearLayout sandboxRow;
     private TextView sandboxHint;
+    private LinearLayout modelRow;
+    private TextView modelLabel;
     private TextView reasoningPicker;
     private TextView reasoningHint;
     private boolean reasoningSaving;
@@ -141,6 +143,9 @@ public class SessionSettingsActivity extends Activity {
         writeSwitch.setEnabled(!state.saving && !state.approvalSaving);
         commandSwitch.setEnabled(!state.saving && !state.approvalSaving);
         interAgentSwitch.setEnabled(!state.saving && !state.approvalSaving);
+        String model = s == null ? null : Agent.modelLabel(agents, s.agent, s.model);
+        modelLabel.setText(s == null ? "Loading…" : model);
+        modelRow.setVisibility(s == null || model != null ? View.VISIBLE : View.GONE);
         renderReasoning(s);
         if (s != null) {
             status = s.status;
@@ -271,30 +276,48 @@ public class SessionSettingsActivity extends Activity {
         LinearLayout form = Widgets.column(this);
         form.setPadding(pad, pad, pad, pad);
 
-        // ---- notifications ----
-        form.addView(section("Notifications"));
+        // ---- session / rename ----
+        addSection(form, "Session");
+
+        form.addView(label("Name"));
+        LinearLayout nameRow = Widgets.row(this);
+        nameField = new EditText(this);
+        nameField.setText(sessionName == null ? "" : sessionName);
+        nameField.setHint("Session name");
+        nameField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        nameField.setTextColor(Theme.INK);
+        nameField.setHintTextColor(Theme.FAINT);
+        nameField.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        nameField.setSingleLine(true);
+        nameField.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
+        int fp = Theme.dp(this, 12);
+        nameField.setPadding(fp, 0, fp, 0);
+        nameField.setMinHeight(Theme.dp(this, 44));
+        nameField.setGravity(Gravity.CENTER_VERTICAL);
+        nameField.setLayoutParams(lp(0, WRAP, 1f));
+        nameRow.addView(nameField);
+        TextView save = Widgets.primaryButton(this, "Rename");
+        save.setLayoutParams(lp(WRAP, Theme.dp(this, 44)));
+        Widgets.margins(save, Theme.dp(this, 8), 0, 0, 0);
+        save.setOnClickListener(v -> rename(save));
+        nameRow.addView(save);
+        form.addView(nameRow);
+
+        // A session keeps the model it was created with; older sessions have none.
         form.addView(spacer(12));
+        modelLabel = Widgets.text(this, "Loading…", Theme.INK, 14, false);
+        modelLabel.setTextIsSelectable(true);
+        modelRow = infoRow("Model", modelLabel, null);
+        form.addView(modelRow);
 
-        LinearLayout notifyRow = Widgets.row(this);
-        TextView notifyLabel = Widgets.text(this, "Completion notifications", Theme.INK, 15, false);
-        notifyLabel.setLayoutParams(lp(0, WRAP, 1f));
-        notifyRow.addView(notifyLabel);
-        Switch notifySwitch = new Switch(this);
-        notifySwitch.setChecked(api.prefs().notifyEnabled(sessionId));
-        notifySwitch.setOnCheckedChangeListener((b, checked) -> applyNotify(checked));
-        notifyRow.addView(notifySwitch);
-        form.addView(notifyRow);
-
-        TextView notifyHint = Widgets.text(this,
-                "Notify when this session finishes a task or needs your approval, "
-                        + "even when it isn't on screen.", Theme.MUTED, 12.5f, false);
-        Widgets.margins(notifyHint, 0, Theme.dp(this, 7), 0, 0);
-        form.addView(notifyHint);
+        // Read-only ids, for handing to another agent's session tools.
+        form.addView(idRow("Session ID", sessionId, "Session"));
+        if (!worktreeId.isEmpty() && !"legacy".equals(worktreeId)) {
+            form.addView(idRow("Worktree ID", worktreeId, "Worktree"));
+        }
 
         // ---- reasoning ----
-        form.addView(spacer(28));
-        form.addView(section("Reasoning"));
-        form.addView(spacer(12));
+        addSection(form, "Reasoning");
         reasoningPicker = Widgets.text(this, "…", Theme.INK, 15, false);
         reasoningPicker.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
         int rp = Theme.dp(this, 12);
@@ -308,10 +331,19 @@ public class SessionSettingsActivity extends Activity {
         Widgets.margins(reasoningHint, 0, Theme.dp(this, 7), 0, 0);
         form.addView(reasoningHint);
 
+        // ---- sandbox ----
+        addSection(form, "Sandbox");
+        sandboxSwitch = new Switch(this);
+        sandboxRow = toggleRow("Sandbox this session", sandboxSwitch, false, this::applySandbox);
+        sandboxRow.setVisibility(View.GONE);
+        sandboxSwitch.setEnabled(false);
+        form.addView(sandboxRow);
+        sandboxHint = Widgets.text(this, "Loading session settings…", Theme.MUTED, 12.5f, false);
+        Widgets.margins(sandboxHint, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(sandboxHint);
+
         // ---- auto-approve ----
-        form.addView(spacer(28));
-        form.addView(section("Auto-approve"));
-        form.addView(spacer(12));
+        addSection(form, "Auto-approve");
 
         writeSwitch = new Switch(this);
         form.addView(toggleRow("Writes", writeSwitch, autoApproveWrite,
@@ -334,57 +366,27 @@ public class SessionSettingsActivity extends Activity {
         Widgets.margins(autoHint, 0, Theme.dp(this, 7), 0, 0);
         form.addView(autoHint);
 
-        form.addView(spacer(28));
-        form.addView(section("Sandbox"));
-        sandboxSwitch = new Switch(this);
-        sandboxRow = toggleRow("Sandbox", sandboxSwitch, false, this::applySandbox);
-        sandboxRow.setVisibility(View.GONE);
-        sandboxSwitch.setEnabled(false);
-        form.addView(sandboxRow);
-        sandboxHint = Widgets.text(this, "Loading session settings…", Theme.MUTED, 12.5f, false);
-        form.addView(sandboxHint);
+        // ---- notifications (device-local) ----
+        addSection(form, "Notifications");
 
-        // ---- session / rename ----
-        form.addView(spacer(28));
-        form.addView(section("Session"));
-        form.addView(spacer(12));
+        LinearLayout notifyRow = Widgets.row(this);
+        TextView notifyLabel = Widgets.text(this, "Completion notifications", Theme.INK, 15, false);
+        notifyLabel.setLayoutParams(lp(0, WRAP, 1f));
+        notifyRow.addView(notifyLabel);
+        Switch notifySwitch = new Switch(this);
+        notifySwitch.setChecked(api.prefs().notifyEnabled(sessionId));
+        notifySwitch.setOnCheckedChangeListener((b, checked) -> applyNotify(checked));
+        notifyRow.addView(notifySwitch);
+        form.addView(notifyRow);
 
-        form.addView(label("Name"));
-        nameField = new EditText(this);
-        nameField.setText(sessionName == null ? "" : sessionName);
-        nameField.setHint("Session name");
-        nameField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        nameField.setTextColor(Theme.INK);
-        nameField.setHintTextColor(Theme.FAINT);
-        nameField.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        nameField.setSingleLine(true);
-        nameField.setBackground(Theme.rounded(this, Theme.PANEL2, 10, Theme.LINE, 1));
-        int fp = Theme.dp(this, 12);
-        nameField.setPadding(fp, 0, fp, 0);
-        nameField.setMinHeight(Theme.dp(this, 44));
-        nameField.setGravity(Gravity.CENTER_VERTICAL);
-        nameField.setLayoutParams(lp(MATCH, WRAP));
-        form.addView(nameField);
-
-        form.addView(spacer(24));
-        TextView save = Widgets.primaryButton(this, "Rename");
-        save.setMinimumHeight(Theme.dp(this, 48));
-        save.setLayoutParams(lp(MATCH, WRAP));
-        save.setOnClickListener(v -> rename(save));
-        form.addView(save);
-
-        // Read-only ids, for handing to another agent's session tools.
-        form.addView(spacer(16));
-        form.addView(idRow("Session ID", sessionId, "Session"));
-        if (!worktreeId.isEmpty() && !"legacy".equals(worktreeId)) {
-            form.addView(spacer(6));
-            form.addView(idRow("Worktree ID", worktreeId, "Worktree"));
-        }
+        TextView notifyHint = Widgets.text(this,
+                "Notify when this session finishes a task or needs your approval, "
+                        + "even when it isn't on screen.", Theme.MUTED, 12.5f, false);
+        Widgets.margins(notifyHint, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(notifyHint);
 
         // ---- archive ----
-        form.addView(spacer(28));
-        form.addView(section("Archive"));
-        form.addView(spacer(12));
+        addSection(form, "Archive");
 
         TextView archiveHint = Widgets.text(this, archived
                         ? "This session is archived: it is off the project's session list "
@@ -419,9 +421,7 @@ public class SessionSettingsActivity extends Activity {
         // Detachment is deliberately later cleanup, never part of archiving.
         // It releases the database reference but preserves this exact cwd.
         if (archived && !worktreeId.isEmpty()) {
-            form.addView(spacer(28));
-            form.addView(section("Worktree"));
-            form.addView(spacer(12));
+            addSection(form, "Worktree");
             form.addView(Widgets.text(this,
                     "This archived session is attached to the worktree at:\n\n" + workingDir
                             + "\n\nDetaching releases its reference without changing or deleting "
@@ -433,9 +433,7 @@ public class SessionSettingsActivity extends Activity {
             detach.setOnClickListener(v -> confirmDetach(detach));
             form.addView(detach);
         } else if (isFormerWorktree()) {
-            form.addView(spacer(28));
-            form.addView(section("Former worktree"));
-            form.addView(spacer(12));
+            addSection(form, "Former worktree");
             form.addView(Widgets.text(this,
                     "This session keeps using its former worktree directory:\n\n" + workingDir
                             + "\n\nIf that directory is deleted, the session cannot be "
@@ -688,21 +686,49 @@ public class SessionSettingsActivity extends Activity {
         return t;
     }
 
-    /** {@code Session ID   42   Copy}: a label, the bare id, and a copy action. */
-    private View idRow(String label, String id, String what) {
+    /**
+     * A section header, preceded by a divider unless it opens the form. Leaves
+     * the gap before the section's first control.
+     */
+    private void addSection(LinearLayout form, String title) {
+        if (form.getChildCount() > 0) {
+            form.addView(spacer(24));
+            View div = new View(this);
+            div.setLayoutParams(lp(MATCH, Math.max(1, Theme.dp(this, 0.5f))));
+            div.setBackgroundColor(Theme.LINE_SOFT);
+            form.addView(div);
+            form.addView(spacer(20));
+        }
+        form.addView(section(title));
+        form.addView(spacer(12));
+    }
+
+    /**
+     * {@code Model   Claude Opus   [action]}: a fixed-width label and a value
+     * that takes the remaining width and wraps. Rows share a minimum height so
+     * those with and without an action line up.
+     */
+    private LinearLayout infoRow(String label, TextView value, View action) {
         LinearLayout row = Widgets.row(this);
+        row.setMinimumHeight(Theme.dp(this, 44));
+        row.setLayoutParams(lp(MATCH, WRAP));
         TextView name = Widgets.text(this, label, Theme.MUTED, 13, true);
         name.setLayoutParams(lp(Theme.dp(this, 96), WRAP));
         row.addView(name);
-        TextView value = Widgets.mono(this, id == null ? "" : id, Theme.INK, 14);
-        value.setTextIsSelectable(true);
         value.setLayoutParams(lp(0, WRAP, 1f));
         row.addView(value);
+        if (action != null) row.addView(action);
+        return row;
+    }
+
+    /** {@code Session ID   42   Copy}: a label, the bare id, and a copy action. */
+    private View idRow(String label, String id, String what) {
+        TextView value = Widgets.mono(this, id == null ? "" : id, Theme.INK, 14);
+        value.setTextIsSelectable(true);
         TextView copy = Widgets.ghostButton(this, "Copy");
         copy.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         copy.setOnClickListener(v -> Widgets.copyId(this, id, what));
-        row.addView(copy);
-        return row;
+        return infoRow(label, value, copy);
     }
 
     private View spacer(int dp) {
