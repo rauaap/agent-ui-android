@@ -10,6 +10,7 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -25,6 +26,7 @@ import okhttp3.ResponseBody;
  * Thin REST client for the agent backend. All callbacks are delivered on the
  * main thread. Mirrors the web front-end's fetch() calls:
  *   GET    /agents
+ *   GET    /models
  *   GET    /usage
  *   GET    /sandbox-paths
  *   PATCH  /sandbox-paths
@@ -115,6 +117,20 @@ final class Api {
             for (int i = 0; i < arr.length(); i++) out.add(Agent.from(arr.getJSONObject(i)));
             return out;
         });
+    }
+
+    /**
+     * Each harness's model catalog, keyed by agent id. Discovered once at
+     * server startup and never refreshed, so there is nothing to poll. A
+     * harness whose discovery failed comes back with no models and an error,
+     * not as a failed request.
+     *
+     * <p>A 404 means a server predating the endpoint. Sessions cannot be
+     * created against one, since every session names its model explicitly.
+     */
+    void listModels(Cb<Map<String, Model.Catalog>> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/models").get().build();
+        enqueue(req, cb, body -> Model.catalogs(new JSONObject(body)));
     }
 
     /**
@@ -322,8 +338,13 @@ final class Api {
      * <p>The path travels as both {@code project_path} and its deprecated
      * spelling {@code working_dir}: a server that knows the new name ignores
      * the old one, and one that doesn't ignores the new one.
+     *
+     * <p>{@code model} is always sent, and must be an id from that agent's
+     * catalog: anything else is a 400, and a 503 means its discovery failed.
+     * The app never leaves the choice to the harness. The model cannot be
+     * changed later.
      */
-    void createSession(String name, String projectPath, String agent,
+    void createSession(String name, String projectPath, String agent, String model,
                        String worktreeId, Boolean sandbox, Cb<Session> cb) {
         JSONObject payload = new JSONObject();
         try {
@@ -331,6 +352,7 @@ final class Api {
             payload.put("project_path", projectPath);
             payload.put("working_dir", projectPath);
             payload.put("agent", agent);
+            payload.put("model", model);
             if (sandbox != null) payload.put("sandbox", sandbox);
             // Omitted rather than sent as null for the plain case: the field is
             // optional, and an absent one reads the same to every server.

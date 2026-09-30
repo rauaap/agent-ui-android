@@ -56,6 +56,17 @@ Device smoke checks before release:
   too old to have the endpoint falls back to the two the app used to hardcode.
   Session cards label each agent through the same list, so an id the server no
   longer offers is still shown, as itself.
+- **Model picker** — below the agent, the new-session dialog offers that
+  agent's models from `GET /models`, which the server discovers once at
+  startup. There is no "default" entry: the catalog's first model is
+  preselected, and changing the agent starts over from that agent's first,
+  since model ids mean nothing across harnesses. Every session is created with
+  an explicit model. If an agent has no usable catalog, the dialog shows why
+  and disables Create for that agent; other agents are unaffected. That covers
+  failed discovery on the server, a harness the catalog omits, and a failed
+  `/models` request, including servers without the endpoint. It never falls
+  back to letting the harness choose. The model is fixed when the session is
+  created, and session cards show it.
 - **Git worktrees** — a worktree is a project's, not a session's: it is created
   and removed on its own, any number of sessions can run in one, and it outlives
   all of them. The new-session dialog picks between the project directory (the

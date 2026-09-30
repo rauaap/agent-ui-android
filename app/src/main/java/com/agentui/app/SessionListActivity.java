@@ -10,6 +10,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -20,7 +21,9 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static com.agentui.app.Widgets.MATCH;
 import static com.agentui.app.Widgets.WRAP;
@@ -84,6 +87,14 @@ public class SessionListActivity extends Activity {
     private final List<Agent> agents = new ArrayList<>();
     private boolean agentsLoading;
     private boolean openNewAfterAgentsLoad;
+    /**
+     * Each harness's model catalog from {@code GET /models}. Empty until it
+     * lands, and after a failed fetch — {@link #modelsError} then says why, and
+     * no session can be created until the server offers models again.
+     */
+    private final Map<String, Model.Catalog> models = new HashMap<>();
+    private boolean modelsLoading;
+    private String modelsError;
     /** The sessions currently on screen, so a worktree load can re-render them. */
     private List<Session> lastSessions;
 
@@ -245,7 +256,10 @@ public class SessionListActivity extends Activity {
         // Do not carry one server's registry into another after Settings changes
         // the address. The fallback supplies labels until the fresh list lands.
         agents.clear();
+        models.clear();
+        modelsError = null;
         loadAgents();
+        loadModels();
         loadWorktrees();
         api.listSessions(new Api.Cb<List<Session>>() {
             @Override public void onResult(List<Session> sessions) {
@@ -330,8 +344,34 @@ public class SessionListActivity extends Activity {
         });
     }
 
+    /**
+     * The model catalogs. Fixed from server startup, but refetched alongside
+     * the agents for the same reason: the address may now name another server.
+     * A failure — an older server without the endpoint included — is kept for
+     * the new-session dialog, which refuses to create without a model.
+     */
+    private void loadModels() {
+        modelsLoading = true;
+        api.listModels(new Api.Cb<Map<String, Model.Catalog>>() {
+            @Override public void onResult(Map<String, Model.Catalog> catalogs) {
+                models.clear();
+                models.putAll(catalogs);
+                modelsError = null;
+                modelsLoading = false;
+                if (lastSessions != null) renderList(lastSessions, null);
+                openPendingNewSession();
+            }
+
+            @Override public void onError(String message) {
+                modelsError = message;
+                modelsLoading = false;
+                openPendingNewSession();
+            }
+        });
+    }
+
     private void openPendingNewSession() {
-        if (!openNewAfterAgentsLoad) return;
+        if (!openNewAfterAgentsLoad || agentsLoading || modelsLoading) return;
         openNewAfterAgentsLoad = false;
         showNewSessionDialog();
     }
@@ -535,7 +575,9 @@ public class SessionListActivity extends Activity {
         }
 
         // meta
-        String meta = formatAgent(s.agent) + "  ·  " + formatTime(s.lastActiveAt);
+        String model = Model.label(models, s.agent, s.model);
+        String meta = formatAgent(s.agent) + (model != null ? "  ·  " + model : "")
+                + "  ·  " + formatTime(s.lastActiveAt);
         TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
         Widgets.margins(metaView, 0, Theme.dp(this, elsewhere ? 8 : 10), 0, 0);
         card.addView(metaView);
@@ -672,8 +714,9 @@ public class SessionListActivity extends Activity {
         }
         // A saved preference may name an adapter absent from the legacy fallback
         // list. Wait for the in-flight registry request so "New" never briefly
-        // preselects the wrong agent just because it was tapped quickly.
-        if (agentsLoading) {
+        // preselects the wrong agent just because it was tapped quickly. The
+        // model catalogs are waited for the same way, so the picker is complete.
+        if (agentsLoading || modelsLoading) {
             openNewAfterAgentsLoad = true;
             return;
         }
@@ -718,10 +761,36 @@ public class SessionListActivity extends Activity {
                 "Restricts agent file access. Applies to agent turns, not direct shell commands.",
                 Theme.MUTED, 12.5f, false));
         sandboxSection.setVisibility(Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? View.VISIBLE : View.GONE);
+        // ---- model ----
+        // Scoped to the chosen agent and always explicit: the first model in
+        // its catalog is preselected, and any switch of agent starts over from
+        // that agent's first, since model ids mean nothing across harnesses.
+        // Null only while the agent has no usable catalog, which blocks Create.
+        // Snapshotted like the agents.
+        final Map<String, Model.Catalog> catalogs = new HashMap<>(models);
+        final String catalogsError = modelsError;
+        final String[] modelId = {null};
+        // Create is enabled only with a model chosen and no request in flight.
+        final Button[] create = {null};
+        final boolean[] creating = {false};
+        final Runnable refreshCreate = () -> {
+            if (create[0] != null) create[0].setEnabled(modelId[0] != null && !creating[0]);
+        };
+        TextView modelPicker = selector("");
+        TextView modelHint = Widgets.text(this, "", Theme.MUTED, 12.5f, false);
+        Widgets.margins(modelHint, 0, Theme.dp(this, 7), 0, 0);
+        showModelChoices(catalogs, catalogsError, choices.get(agentIdx[0]).id,
+                modelPicker, modelHint, modelId);
+
         TextView agent = selector(choices.get(agentIdx[0]).name);
         agent.setOnClickListener(av -> new AlertDialog.Builder(this)
                 .setTitle("Agent")
                 .setSingleChoiceItems(agentLabels, agentIdx[0], (d, which) -> {
+                    if (which != agentIdx[0]) {
+                        showModelChoices(catalogs, catalogsError, choices.get(which).id,
+                                modelPicker, modelHint, modelId);
+                        refreshCreate.run();
+                    }
                     agentIdx[0] = which;
                     agent.setText(agentLabels[which]);
                     sandboxSection.setVisibility(Agent.supportsSandbox(choices.get(which).id) ? View.VISIBLE : View.GONE);
@@ -731,6 +800,11 @@ public class SessionListActivity extends Activity {
                 .show());
         content.addView(agent);
         content.addView(sandboxSection);
+
+        content.addView(spacer(14));
+        content.addView(fieldLabel("Model"));
+        content.addView(modelPicker);
+        content.addView(modelHint);
 
         // ---- worktree ----
         // Only offered for a project the server reports as a git repo: anywhere
@@ -766,45 +840,105 @@ public class SessionListActivity extends Activity {
                 .setPositiveButton("Create", null) // overridden below to keep dialog open on error
                 .create();
 
-        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            String name = nameField.getText().toString().trim();
-            if (name.isEmpty()) {
-                toast("Name is required");
-                return;
-            }
-            String dir = projectDir != null ? projectDir : fallbackDir(name);
+        dialog.setOnShowListener(d -> {
+            create[0] = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            refreshCreate.run();
+            create[0].setOnClickListener(v -> {
+                String name = nameField.getText().toString().trim();
+                if (name.isEmpty()) {
+                    toast("Name is required");
+                    return;
+                }
+                String dir = projectDir != null ? projectDir : fallbackDir(name);
 
-            v.setEnabled(false);
-            api.createSession(name, dir, choices.get(agentIdx[0]).id, worktreeId[0],
-                    Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? sandbox.isChecked() : null,
-                    new Api.StatusCb<Session>() {
-                        @Override public void onResult(Session session) {
-                            api.prefs().setNotify(session.id, true);
-                            dialog.dismiss();
-                            openSession(session);
-                        }
-
-                        @Override public void onError(String message) {
-                            v.setEnabled(true);
-                            toast("Unable to create: " + message);
-                        }
-
-                        @Override public void onHttpError(int code, String message) {
-                            v.setEnabled(true);
-                            toast("Unable to create: " + message);
-                            // A worktree removed since the picker was filled: no
-                            // session was created, so the selection is reset to
-                            // somewhere that still exists and the list refreshed.
-                            // A 404 naming the project instead is a different
-                            // problem, and resetting the picker would not help.
-                            if (code == 404 && message.contains("Worktree")) {
-                                selectWorktree(worktreePicker, worktreeId, null);
-                                loadWorktrees();
+                creating[0] = true;
+                refreshCreate.run();
+                api.createSession(name, dir, choices.get(agentIdx[0]).id, modelId[0], worktreeId[0],
+                        Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? sandbox.isChecked() : null,
+                        new Api.StatusCb<Session>() {
+                            @Override public void onResult(Session session) {
+                                api.prefs().setNotify(session.id, true);
+                                dialog.dismiss();
+                                openSession(session);
                             }
-                        }
-                    });
-        }));
+
+                            @Override public void onError(String message) {
+                                creating[0] = false;
+                                refreshCreate.run();
+                                toast("Unable to create: " + message);
+                            }
+
+                            @Override public void onHttpError(int code, String message) {
+                                creating[0] = false;
+                                refreshCreate.run();
+                                toast("Unable to create: " + message);
+                                // A worktree removed since the picker was filled: no
+                                // session was created, so the selection is reset to
+                                // somewhere that still exists and the list refreshed.
+                                // A 404 naming the project instead is a different
+                                // problem, and resetting the picker would not help.
+                                if (code == 404 && message.contains("Worktree")) {
+                                    selectWorktree(worktreePicker, worktreeId, null);
+                                    loadWorktrees();
+                                }
+                                // A refused model (400, 503) is shown as is: the
+                                // server's catalog or harness needs fixing, and no
+                                // other model is silently substituted.
+                            }
+                        });
+            });
+        });
         dialog.show();
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* model picker                                                     */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Point the model picker at one agent's catalog and select its first model.
+     * Without a usable catalog nothing is selected, the picker is disabled and
+     * the reason is shown underneath; the caller then keeps Create disabled.
+     */
+    private void showModelChoices(Map<String, Model.Catalog> catalogs, String fetchError,
+                                  String agentId, TextView picker, TextView hint,
+                                  String[] modelId) {
+        String unavailable = Model.unavailable(catalogs, fetchError, agentId);
+        if (unavailable != null) {
+            modelId[0] = null;
+            picker.setText("Unavailable");
+            picker.setEnabled(false);
+            picker.setTextColor(Theme.MUTED);
+            picker.setOnClickListener(null);
+            hint.setText(unavailable);
+            hint.setTextColor(Theme.DANGER);
+            return;
+        }
+        Model.Catalog catalog = Model.forAgent(catalogs, agentId);
+        modelId[0] = catalog.models.get(0).id;
+        picker.setText(catalog.models.get(0).name);
+        picker.setEnabled(true);
+        picker.setTextColor(Theme.INK);
+        hint.setText("Fixed for the session's life.");
+        hint.setTextColor(Theme.MUTED);
+        picker.setOnClickListener(v -> {
+            CharSequence[] labels = new CharSequence[catalog.models.size()];
+            int checked = 0;
+            for (int i = 0; i < labels.length; i++) {
+                Model m = catalog.models.get(i);
+                labels[i] = m.name;
+                if (m.id.equals(modelId[0])) checked = i;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("Model")
+                    .setSingleChoiceItems(labels, checked, (d, which) -> {
+                        modelId[0] = catalog.models.get(which).id;
+                        picker.setText(labels[which]);
+                        d.dismiss();
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        });
     }
 
     /* ---------------------------------------------------------------- */

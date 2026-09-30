@@ -281,6 +281,7 @@ public class ArchivedActivity extends Activity {
 
         TextView metaView = Widgets.text(this,
                 Agent.label(Agent.FALLBACK, s.agent)
+                        + (s.model != null ? "  ·  " + s.model : "")
                         + "  ·  archived " + SessionListActivity.formatTime(s.archivedAt),
                 Theme.FAINT, 12, false);
         Widgets.margins(metaView, 0, Theme.dp(this, 6), 0, 0);
