@@ -1,12 +1,16 @@
 package com.agentui.app;
 
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
- * An agent the backend can run, as listed by {@code GET /agents}.
+ * An agent the backend can run, with its model catalog, as listed by
+ * {@code GET /agents}.
  *
  * <p>The list is the server's own registry — the {@code id} is what
  * {@code POST /sessions} takes as {@code agent}, the {@code name} is a label to
@@ -15,6 +19,10 @@ import java.util.List;
  * list can neither advertise an agent the server would reject nor omit one it
  * would accept; the client's job is to render it and send an id back, not to
  * know what agents exist.
+ *
+ * <p>Each agent carries the models its harness offered when the server started.
+ * A harness whose discovery failed has no models and a {@code modelsError}
+ * saying why; the other agents are unaffected.
  */
 final class Agent {
     /** What {@code POST /sessions} takes as {@code agent}. Opaque. */
@@ -23,11 +31,17 @@ final class Agent {
     final String name;
     /** Whether this is the one to preselect; exactly one entry carries it. */
     final boolean isDefault;
+    /** The harness's catalog, in the server's order. */
+    final List<Model> models;
+    /** Why model discovery failed, or null when it succeeded. */
+    final String modelsError;
 
-    Agent(String id, String name, boolean isDefault) {
+    Agent(String id, String name, boolean isDefault, List<Model> models, String modelsError) {
         this.id = id;
         this.name = name;
         this.isDefault = isDefault;
+        this.models = models;
+        this.modelsError = modelsError;
     }
 
     /** Execution support on current servers; an absent session field is still unknown. */
@@ -35,22 +49,30 @@ final class Agent {
         return "pi".equals(id) || "claude-code".equals(id);
     }
 
-    static Agent from(JSONObject o) {
-        // Agent ids are minted by the server's registry, not its database, so
-        // they are strings on every server and stay on plain optString.
-        String id = o.optString("id", "");
-        String name = o.optString("name", "");
-        return new Agent(id, name.isEmpty() ? id : name, o.optBoolean("default", false));
+    /** Parses the whole {@code GET /agents} body, keeping the server's order. */
+    static List<Agent> list(JSONArray arr) throws JSONException {
+        List<Agent> out = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) out.add(from(arr.getJSONObject(i)));
+        return out;
     }
 
-    /**
-     * What to offer against a server with no {@code /agents} — one predating the
-     * endpoint. Offer only the default agent; the client must not advertise an
-     * optional adapter unless the server says it is available. Doubles as the
-     * label table before the real list has landed.
-     */
-    static final List<Agent> FALLBACK = Arrays.asList(
-            new Agent("claude-code", "Claude Code", true));
+    static Agent from(JSONObject o) throws JSONException {
+        List<Model> models = new ArrayList<>();
+        JSONArray arr = o.getJSONArray("models");
+        for (int i = 0; i < arr.length(); i++) models.add(Model.from(arr.getJSONObject(i)));
+        // models_error: null would read back from getString as the literal "null".
+        String error = o.isNull("models_error") ? null : o.getString("models_error");
+        return new Agent(o.getString("id"), o.getString("name"), o.getBoolean("default"),
+                Collections.unmodifiableList(models), error);
+    }
+
+    /** The entry for an id, or null when the server does not list it. */
+    static Agent find(List<Agent> known, String id) {
+        for (Agent a : known) {
+            if (a.id.equals(id)) return a;
+        }
+        return null;
+    }
 
     /**
      * The label for an agent id, falling back to the id itself. An unknown id
@@ -58,10 +80,30 @@ final class Agent {
      * has since dropped an adapter still has to render.
      */
     static String label(List<Agent> known, String id) {
-        for (Agent a : known) {
-            if (a.id.equals(id)) return a.name;
+        Agent a = find(known, id);
+        return a != null ? a.name : id;
+    }
+
+    /**
+     * The label for a session's model: its catalog name when the session's
+     * agent still lists it, else the id itself. Null for a session created
+     * before models were selectable, which has none; one created before a
+     * catalog change keeps its id.
+     */
+    static String modelLabel(List<Agent> known, String agentId, String modelId) {
+        if (modelId == null) return null;
+        Agent a = find(known, agentId);
+        if (a != null) {
+            for (Model m : a.models) if (m.id.equals(modelId)) return m.name;
         }
-        return id;
+        return modelId;
+    }
+
+    /** Why no session can be created with this agent, or null when it has a model to choose. */
+    String unavailable() {
+        if (modelsError != null) return "Model list unavailable: " + modelsError;
+        if (models.isEmpty()) return "The server found no models for this agent.";
+        return null;
     }
 
     /**

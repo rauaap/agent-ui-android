@@ -52,21 +52,20 @@ Device smoke checks before release:
   it can run (`GET /agents`). Settings can choose the agent preselected for every
   new session, or defer to the one the server flags as default. If that preferred
   adapter is unavailable, the picker safely falls back to the server default. An
-  agent added or removed backend-side shows up without an app release. A server
-  too old to have the endpoint falls back to the two the app used to hardcode.
-  Session cards label each agent through the same list, so an id the server no
-  longer offers is still shown, as itself.
-- **Model picker** — below the agent, the new-session dialog offers that
-  agent's models from `GET /models`, which the server discovers once at
+  agent added or removed backend-side shows up without an app release. If the
+  request fails, the dialog does not open and says why. Session cards label
+  each agent through the same list, so an id the server no longer offers is
+  still shown, as itself.
+- **Model picker** — below the agent, the new-session dialog offers the models
+  listed with that agent in `GET /agents`, which the server discovers once at
   startup. There is no "default" entry: the catalog's first model is
   preselected, and changing the agent starts over from that agent's first,
   since model ids mean nothing across harnesses. Every session is created with
-  an explicit model. If an agent has no usable catalog, the dialog shows why
-  and disables Create for that agent; other agents are unaffected. That covers
-  failed discovery on the server, a harness the catalog omits, and a failed
-  `/models` request, including servers without the endpoint. It never falls
-  back to letting the harness choose. The model is fixed when the session is
-  created, and session cards show it.
+  an explicit model. If an agent has no usable catalog — failed discovery on
+  the server, or none found — the dialog shows why and disables Create for
+  that agent; other agents are unaffected. It never falls back to letting the
+  harness choose. The model is fixed when the session is created, and session
+  cards show it by its catalog name.
 - **Git worktrees** — a worktree is a project's, not a session's: it is created
   and removed on its own, any number of sessions can run in one, and it outlives
   all of them. The new-session dialog picks between the project directory (the

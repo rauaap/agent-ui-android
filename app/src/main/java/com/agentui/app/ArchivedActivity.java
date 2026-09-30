@@ -43,6 +43,8 @@ public class ArchivedActivity extends Activity {
     private String filterProjectName;
     private TextView subtitle;
     private LinearLayout listContainer;
+    /** Labels each card's agent and model; filled before the first render. */
+    private final List<Agent> agents = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -105,8 +107,8 @@ public class ArchivedActivity extends Activity {
 
     /**
      * Both listings are needed and both are enough: neither is filtered by the
-     * server, so the archive is already in them and there is no third request
-     * to make.
+     * server, so the archive is already in them. The agent catalog is fetched
+     * last, only to label the cards.
      */
     private void load() {
         if (!prefs.isConfigured()) {
@@ -122,15 +124,26 @@ public class ArchivedActivity extends Activity {
 
     private void loadProjects(List<Session> sessions) {
         api.listProjects(new Api.StatusCb<List<Project>>() {
-            @Override public void onResult(List<Project> projects) { render(projects, sessions, null); }
+            @Override public void onResult(List<Project> projects) { loadAgents(projects, sessions); }
             @Override public void onError(String message) { render(null, null, message); }
 
             @Override public void onHttpError(int code, String message) {
                 // An older server has no projects to group by — and no archive
                 // either, so the sessions section will come out empty too.
-                if (code == 404) render(new ArrayList<>(), sessions, null);
+                if (code == 404) loadAgents(new ArrayList<>(), sessions);
                 else render(null, null, message);
             }
+        });
+    }
+
+    private void loadAgents(List<Project> projects, List<Session> sessions) {
+        api.listAgents(new Api.Cb<List<Agent>>() {
+            @Override public void onResult(List<Agent> list) {
+                agents.clear();
+                agents.addAll(list);
+                render(projects, sessions, null);
+            }
+            @Override public void onError(String message) { render(null, null, message); }
         });
     }
 
@@ -280,8 +293,8 @@ public class ArchivedActivity extends Activity {
         }
 
         TextView metaView = Widgets.text(this,
-                Agent.label(Agent.FALLBACK, s.agent)
-                        + (s.model != null ? "  ·  " + s.model : "")
+                Agent.label(agents, s.agent)
+                        + (s.model != null ? "  ·  " + Agent.modelLabel(agents, s.agent, s.model) : "")
                         + "  ·  archived " + SessionListActivity.formatTime(s.archivedAt),
                 Theme.FAINT, 12, false);
         Widgets.margins(metaView, 0, Theme.dp(this, 6), 0, 0);

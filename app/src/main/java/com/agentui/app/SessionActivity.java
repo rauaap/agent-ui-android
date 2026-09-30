@@ -87,7 +87,7 @@ public class SessionActivity extends Activity {
     private String sessionId;
     private String sessionName;
     private String sessionAgent = "";
-    private final List<Agent> agents = new ArrayList<>(Agent.FALLBACK);
+    private final List<Agent> agents = new ArrayList<>();
     private final List<TextView> agentLabelViews = new ArrayList<>();
     /**
      * Every session on the server, in any project, by id: other agents can
@@ -229,17 +229,13 @@ public class SessionActivity extends Activity {
     private void loadAgents() {
         api.listAgents(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
-                if (!list.isEmpty()) {
-                    agents.clear();
-                    agents.addAll(list);
-                }
+                agents.clear();
+                agents.addAll(list);
                 updateAgentLabels();
             }
 
-            @Override public void onError(String message) {
-                // Keep the older-server fallback; the raw id is used for anything unknown.
-                updateAgentLabels();
-            }
+            // The raw id stays as the label.
+            @Override public void onError(String message) {}
         });
     }
 

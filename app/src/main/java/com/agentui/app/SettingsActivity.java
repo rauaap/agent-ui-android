@@ -55,7 +55,6 @@ public class SettingsActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = new Prefs(this);
         defaultAgentId = prefs.defaultAgent();
-        agents.addAll(Agent.FALLBACK);
         setContentView(buildRoot());
         updatePreview();
         updateTemplatePreview();
@@ -371,12 +370,11 @@ public class SettingsActivity extends Activity {
         }, "token-validation").start();
     }
 
-    /** Refresh the chooser from the configured server; fallback stays usable offline. */
+    /** Fill the chooser from the configured server; "Server default" needs no answer. */
     private void loadAgents() {
         if (!prefs.isConfigured()) return;
         new Api(this).listAgents(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
-                if (list.isEmpty()) return;
                 agents.clear();
                 agents.addAll(list);
                 defaultAgentField.setText(defaultAgentLabel());

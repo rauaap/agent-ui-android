@@ -21,9 +21,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static com.agentui.app.Widgets.MATCH;
 import static com.agentui.app.Widgets.WRAP;
@@ -79,22 +77,16 @@ public class SessionListActivity extends Activity {
      */
     private boolean worktreesSupported = true;
     /**
-     * The agents this server can run, filled from {@code GET /agents} and empty
-     * until it lands — or against a server that has no such endpoint, where
-     * {@link Agent#FALLBACK} stands in. The picker in the new-session dialog is
-     * built from it, and the cards label a session's agent through it.
+     * The agents this server can run, with their model catalogs, filled from
+     * {@code GET /agents}. Empty until it lands, and after a failed fetch —
+     * {@link #agentsError} then says why, and no session can be created until
+     * the server answers. The pickers in the new-session dialog are built from
+     * it, and the cards label a session's agent and model through it.
      */
     private final List<Agent> agents = new ArrayList<>();
     private boolean agentsLoading;
+    private String agentsError;
     private boolean openNewAfterAgentsLoad;
-    /**
-     * Each harness's model catalog from {@code GET /models}. Empty until it
-     * lands, and after a failed fetch — {@link #modelsError} then says why, and
-     * no session can be created until the server offers models again.
-     */
-    private final Map<String, Model.Catalog> models = new HashMap<>();
-    private boolean modelsLoading;
-    private String modelsError;
     /** The sessions currently on screen, so a worktree load can re-render them. */
     private List<Session> lastSessions;
 
@@ -254,12 +246,10 @@ public class SessionListActivity extends Activity {
     private void loadSessions() {
         sessionCount.setText("…");
         // Do not carry one server's registry into another after Settings changes
-        // the address. The fallback supplies labels until the fresh list lands.
+        // the address. Cards show raw ids until the fresh list lands.
         agents.clear();
-        models.clear();
-        modelsError = null;
+        agentsError = null;
         loadAgents();
-        loadModels();
         loadWorktrees();
         api.listSessions(new Api.Cb<List<Session>>() {
             @Override public void onResult(List<Session> sessions) {
@@ -313,65 +303,37 @@ public class SessionListActivity extends Activity {
     }
 
     /**
-     * The agents this server can run. Refetched with the list rather than once
-     * per process: it is a different server's answer after the address changes
-     * in Settings, and one request against a hand-written list is a fair trade.
-     *
-     * <p>A failure is silent, like the worktree load — the fallback list is
-     * still a working picker, and an unreachable server is already being
-     * reported by the session list itself.
+     * The agents this server can run, with their model catalogs. Fixed from
+     * server startup, but refetched with the list rather than once per
+     * process: it is a different server's answer after the address changes in
+     * Settings. A failure is kept for the new-session dialog, which refuses to
+     * create without an agent and model; an unreachable server is already
+     * being reported by the session list itself.
      */
     private void loadAgents() {
         agentsLoading = true;
         api.listAgents(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
                 agents.clear();
-                // An empty answer leaves this empty, which agentChoices() reads
-                // as no answer and falls back — a picker with nothing in it
-                // would be worse than a stale one.
                 agents.addAll(list);
+                agentsError = null;
                 agentsLoading = false;
-                // Cards label the agent through this, and are often on screen
-                // by the time it lands.
+                // Cards label the agent and model through this, and are often
+                // on screen by the time it lands.
                 if (lastSessions != null) renderList(lastSessions, null);
                 openPendingNewSession();
             }
 
             @Override public void onError(String message) {
+                agentsError = message;
                 agentsLoading = false;
-                openPendingNewSession();
-            }
-        });
-    }
-
-    /**
-     * The model catalogs. Fixed from server startup, but refetched alongside
-     * the agents for the same reason: the address may now name another server.
-     * A failure — an older server without the endpoint included — is kept for
-     * the new-session dialog, which refuses to create without a model.
-     */
-    private void loadModels() {
-        modelsLoading = true;
-        api.listModels(new Api.Cb<Map<String, Model.Catalog>>() {
-            @Override public void onResult(Map<String, Model.Catalog> catalogs) {
-                models.clear();
-                models.putAll(catalogs);
-                modelsError = null;
-                modelsLoading = false;
-                if (lastSessions != null) renderList(lastSessions, null);
-                openPendingNewSession();
-            }
-
-            @Override public void onError(String message) {
-                modelsError = message;
-                modelsLoading = false;
                 openPendingNewSession();
             }
         });
     }
 
     private void openPendingNewSession() {
-        if (!openNewAfterAgentsLoad || agentsLoading || modelsLoading) return;
+        if (!openNewAfterAgentsLoad || agentsLoading) return;
         openNewAfterAgentsLoad = false;
         showNewSessionDialog();
     }
@@ -575,7 +537,7 @@ public class SessionListActivity extends Activity {
         }
 
         // meta
-        String model = Model.label(models, s.agent, s.model);
+        String model = Agent.modelLabel(agents, s.agent, s.model);
         String meta = formatAgent(s.agent) + (model != null ? "  ·  " + model : "")
                 + "  ·  " + formatTime(s.lastActiveAt);
         TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
@@ -712,12 +674,14 @@ public class SessionListActivity extends Activity {
             startActivity(new Intent(this, SettingsActivity.class));
             return;
         }
-        // A saved preference may name an adapter absent from the legacy fallback
-        // list. Wait for the in-flight registry request so "New" never briefly
-        // preselects the wrong agent just because it was tapped quickly. The
-        // model catalogs are waited for the same way, so the picker is complete.
-        if (agentsLoading || modelsLoading) {
+        // Wait for the in-flight registry request, which carries the model
+        // catalogs too, so both pickers are complete when the dialog opens.
+        if (agentsLoading) {
             openNewAfterAgentsLoad = true;
+            return;
+        }
+        if (agentsError != null) {
+            toast("Agent list unavailable: " + agentsError);
             return;
         }
 
@@ -747,7 +711,7 @@ public class SessionListActivity extends Activity {
         content.addView(fieldLabel("Agent"));
         // Snapshotted for the life of the dialog: a refresh landing while it is
         // open must not renumber the choice under the selected index.
-        final List<Agent> choices = agentChoices();
+        final List<Agent> choices = new ArrayList<>(agents);
         final CharSequence[] agentLabels = new CharSequence[choices.size()];
         for (int i = 0; i < choices.size(); i++) agentLabels[i] = choices.get(i).name;
         final int[] agentIdx = {Agent.defaultIndex(choices, prefs.defaultAgent())};
@@ -766,9 +730,6 @@ public class SessionListActivity extends Activity {
         // its catalog is preselected, and any switch of agent starts over from
         // that agent's first, since model ids mean nothing across harnesses.
         // Null only while the agent has no usable catalog, which blocks Create.
-        // Snapshotted like the agents.
-        final Map<String, Model.Catalog> catalogs = new HashMap<>(models);
-        final String catalogsError = modelsError;
         final String[] modelId = {null};
         // Create is enabled only with a model chosen and no request in flight.
         final Button[] create = {null};
@@ -779,16 +740,14 @@ public class SessionListActivity extends Activity {
         TextView modelPicker = selector("");
         TextView modelHint = Widgets.text(this, "", Theme.MUTED, 12.5f, false);
         Widgets.margins(modelHint, 0, Theme.dp(this, 7), 0, 0);
-        showModelChoices(catalogs, catalogsError, choices.get(agentIdx[0]).id,
-                modelPicker, modelHint, modelId);
+        showModelChoices(choices.get(agentIdx[0]), modelPicker, modelHint, modelId);
 
         TextView agent = selector(choices.get(agentIdx[0]).name);
         agent.setOnClickListener(av -> new AlertDialog.Builder(this)
                 .setTitle("Agent")
                 .setSingleChoiceItems(agentLabels, agentIdx[0], (d, which) -> {
                     if (which != agentIdx[0]) {
-                        showModelChoices(catalogs, catalogsError, choices.get(which).id,
-                                modelPicker, modelHint, modelId);
+                        showModelChoices(choices.get(which), modelPicker, modelHint, modelId);
                         refreshCreate.run();
                     }
                     agentIdx[0] = which;
@@ -900,10 +859,8 @@ public class SessionListActivity extends Activity {
      * Without a usable catalog nothing is selected, the picker is disabled and
      * the reason is shown underneath; the caller then keeps Create disabled.
      */
-    private void showModelChoices(Map<String, Model.Catalog> catalogs, String fetchError,
-                                  String agentId, TextView picker, TextView hint,
-                                  String[] modelId) {
-        String unavailable = Model.unavailable(catalogs, fetchError, agentId);
+    private void showModelChoices(Agent agent, TextView picker, TextView hint, String[] modelId) {
+        String unavailable = agent.unavailable();
         if (unavailable != null) {
             modelId[0] = null;
             picker.setText("Unavailable");
@@ -914,25 +871,25 @@ public class SessionListActivity extends Activity {
             hint.setTextColor(Theme.DANGER);
             return;
         }
-        Model.Catalog catalog = Model.forAgent(catalogs, agentId);
-        modelId[0] = catalog.models.get(0).id;
-        picker.setText(catalog.models.get(0).name);
+        List<Model> models = agent.models;
+        modelId[0] = models.get(0).id;
+        picker.setText(models.get(0).name);
         picker.setEnabled(true);
         picker.setTextColor(Theme.INK);
         hint.setText("Fixed for the session's life.");
         hint.setTextColor(Theme.MUTED);
         picker.setOnClickListener(v -> {
-            CharSequence[] labels = new CharSequence[catalog.models.size()];
+            CharSequence[] labels = new CharSequence[models.size()];
             int checked = 0;
             for (int i = 0; i < labels.length; i++) {
-                Model m = catalog.models.get(i);
+                Model m = models.get(i);
                 labels[i] = m.name;
                 if (m.id.equals(modelId[0])) checked = i;
             }
             new AlertDialog.Builder(this)
                     .setTitle("Model")
                     .setSingleChoiceItems(labels, checked, (d, which) -> {
-                        modelId[0] = catalog.models.get(which).id;
+                        modelId[0] = models.get(which).id;
                         picker.setText(labels[which]);
                         d.dismiss();
                     })
@@ -1115,17 +1072,8 @@ public class SessionListActivity extends Activity {
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
     }
 
-    /**
-     * What the picker offers: what the server said it can run, or the built-in
-     * list while that is in flight and against a server that cannot answer.
-     * Never empty, so callers can index it.
-     */
-    private List<Agent> agentChoices() {
-        return agents.isEmpty() ? Agent.FALLBACK : agents;
-    }
-
     private String formatAgent(String agent) {
-        return Agent.label(agentChoices(), agent);
+        return Agent.label(agents, agent);
     }
 
     private static final DateTimeFormatter TIME_FMT =

@@ -10,7 +10,6 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -26,7 +25,6 @@ import okhttp3.ResponseBody;
  * Thin REST client for the agent backend. All callbacks are delivered on the
  * main thread. Mirrors the web front-end's fetch() calls:
  *   GET    /agents
- *   GET    /models
  *   GET    /usage
  *   GET    /sandbox-paths
  *   PATCH  /sandbox-paths
@@ -101,36 +99,16 @@ final class Api {
     Prefs prefs() { return prefs; }
 
     /**
-     * The agents this server can run, in registration order, for the agent
-     * picker. Server-wide rather than project-scoped, and effectively static —
-     * it changes when the server is reconfigured, not while the app is open.
-     *
-     * <p>A 404 means a server predating the endpoint, whose agents are
-     * {@link Agent#FALLBACK}; callers that want to tell that from an
-     * unreachable server want {@link StatusCb}.
+     * The agents this server can run, in registration order, each with the
+     * model catalog its harness offered at server startup. Server-wide rather
+     * than project-scoped, and never refreshed server-side, so there is nothing
+     * to poll — it changes when the server is restarted, not while the app is
+     * open. A harness whose discovery failed comes back with no models and a
+     * {@code models_error}, not as a failed request.
      */
     void listAgents(Cb<List<Agent>> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/agents").get().build();
-        enqueue(req, cb, body -> {
-            List<Agent> out = new ArrayList<>();
-            JSONArray arr = new JSONArray(body);
-            for (int i = 0; i < arr.length(); i++) out.add(Agent.from(arr.getJSONObject(i)));
-            return out;
-        });
-    }
-
-    /**
-     * Each harness's model catalog, keyed by agent id. Discovered once at
-     * server startup and never refreshed, so there is nothing to poll. A
-     * harness whose discovery failed comes back with no models and an error,
-     * not as a failed request.
-     *
-     * <p>A 404 means a server predating the endpoint. Sessions cannot be
-     * created against one, since every session names its model explicitly.
-     */
-    void listModels(Cb<Map<String, Model.Catalog>> cb) {
-        Request req = new Request.Builder().url(prefs.httpBase() + "/models").get().build();
-        enqueue(req, cb, body -> Model.catalogs(new JSONObject(body)));
+        enqueue(req, cb, body -> Agent.list(new JSONArray(body)));
     }
 
     /**
