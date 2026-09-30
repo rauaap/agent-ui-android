@@ -92,24 +92,30 @@ public class SettingsActivity extends Activity {
         LinearLayout form = Widgets.column(this);
         form.setPadding(pad, pad, pad, pad);
 
-        TextView section = Widgets.text(this, "Server", Theme.ACCENT_STRONG, 12, true);
-        section.setAllCaps(true);
-        section.setLetterSpacing(0.06f);
-        form.addView(section);
-        form.addView(spacer(12));
+        // ---- server connection ----
+        addSection(form, "Server");
 
-        form.addView(label("Host / IP address"));
+        // Host and port side by side: they are one address.
+        LinearLayout addressRow = Widgets.row(this);
+        addressRow.setLayoutParams(lp(MATCH, WRAP));
+        LinearLayout hostCol = Widgets.column(this);
+        hostCol.setLayoutParams(lp(0, WRAP, 1f));
+        hostCol.addView(label("Host / IP address"));
         hostField = field(prefs.host(), "192.168.1.50", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_URI, true);
-        form.addView(hostField);
-
-        form.addView(spacer(16));
-        form.addView(label("Port"));
+        hostCol.addView(hostField);
+        addressRow.addView(hostCol);
+        LinearLayout portCol = Widgets.column(this);
+        portCol.setLayoutParams(lp(Theme.dp(this, 96), WRAP));
+        Widgets.margins(portCol, Theme.dp(this, 8), 0, 0, 0);
+        portCol.addView(label("Port"));
         portField = field(String.valueOf(prefs.port()), "8080",
                 InputType.TYPE_CLASS_NUMBER, true);
-        form.addView(portField);
+        portCol.addView(portField);
+        addressRow.addView(portCol);
+        form.addView(addressRow);
 
-        form.addView(spacer(16));
+        form.addView(spacer(12));
         LinearLayout tlsRow = Widgets.row(this);
         TextView tlsLabel = Widgets.text(this, "Use HTTPS / WSS (TLS)", Theme.INK, 15, false);
         tlsLabel.setLayoutParams(lp(0, WRAP, 1f));
@@ -121,6 +127,8 @@ public class SettingsActivity extends Activity {
 
         form.addView(spacer(16));
         form.addView(label("Server token"));
+        LinearLayout tokenRow = Widgets.row(this);
+        tokenRow.setLayoutParams(lp(MATCH, WRAP));
         tokenField = field(prefs.token(), "Paste server token",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD, true);
         // field() calls setSingleLine after setInputType, which replaces the password mask.
@@ -128,20 +136,26 @@ public class SettingsActivity extends Activity {
                 android.text.method.PasswordTransformationMethod.getInstance());
         tokenField.setSaveEnabled(false);
         tokenField.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
-        form.addView(tokenField);
-        Switch showToken = new Switch(this);
-        showToken.setText("Show token");
-        showToken.setOnCheckedChangeListener((button, checked) -> {
-            tokenField.setTransformationMethod(checked ? null
+        tokenField.setLayoutParams(lp(0, WRAP, 1f));
+        tokenRow.addView(tokenField);
+        TextView showToken = Widgets.ghostButton(this, "Show");
+        showToken.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        showToken.setLayoutParams(lp(Theme.dp(this, 72), Theme.dp(this, 44)));
+        Widgets.margins(showToken, Theme.dp(this, 8), 0, 0, 0);
+        showToken.setOnClickListener(v -> {
+            boolean hidden = tokenField.getTransformationMethod() != null;
+            tokenField.setTransformationMethod(hidden ? null
                     : android.text.method.PasswordTransformationMethod.getInstance());
             tokenField.setSelection(tokenField.length());
+            showToken.setText(hidden ? "Hide" : "Show");
         });
-        form.addView(showToken);
-        form.addView(Widgets.text(this, Auth.rejected()
+        tokenRow.addView(showToken);
+        form.addView(tokenRow);
+        form.addView(hint(Auth.rejected()
                 ? "The server rejected the token. It may have been changed on the server."
-                : "Enter the shared token from your server to connect.", Theme.MUTED, 13, false));
+                : "The shared token from your server.", Auth.rejected() ? Theme.DANGER : Theme.MUTED));
 
-        form.addView(spacer(20));
+        form.addView(spacer(16));
         preview = Widgets.mono(this, "", Theme.MUTED, 13);
         preview.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
         int pp = Theme.dp(this, 12);
@@ -149,63 +163,39 @@ public class SettingsActivity extends Activity {
         preview.setLayoutParams(lp(MATCH, WRAP));
         form.addView(preview);
 
-        form.addView(spacer(28));
-        TextView sessionSection = Widgets.text(this, "Sessions", Theme.ACCENT_STRONG, 12, true);
-        sessionSection.setAllCaps(true);
-        sessionSection.setLetterSpacing(0.06f);
-        form.addView(sessionSection);
-        form.addView(spacer(12));
+        // ---- defaults for new work ----
+        addSection(form, "Defaults");
 
-        form.addView(label("Default agent"));
+        form.addView(label("Agent"));
         defaultAgentField = selector(defaultAgentLabel());
         defaultAgentField.setOnClickListener(v -> chooseDefaultAgent());
         form.addView(defaultAgentField);
-        TextView agentHint = Widgets.text(this,
-                "Preselected whenever you start a session. Server default follows "
-                        + "the backend's choice.",
-                Theme.MUTED, 12.5f, false);
-        Widgets.margins(agentHint, 0, Theme.dp(this, 7), 0, 0);
-        form.addView(agentHint);
+        form.addView(hint("Preselected whenever you start a session. Server default follows "
+                + "the backend's choice.", Theme.MUTED));
 
-        form.addView(spacer(28));
-        TextView projectSection = Widgets.text(this, "Projects", Theme.ACCENT_STRONG, 12, true);
-        projectSection.setAllCaps(true);
-        projectSection.setLetterSpacing(0.06f);
-        form.addView(projectSection);
-        form.addView(spacer(12));
-
+        form.addView(spacer(20));
         form.addView(label("Projects directory"));
         defaultDirField = field(prefs.defaultDir(), "/projects/", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_URI, true);
         form.addView(defaultDirField);
-        TextView dirHint = Widgets.text(this,
-                "Pre-filled when you start a new project. Sessions take their "
-                        + "directory from the project they are in.",
-                Theme.MUTED, 12.5f, false);
-        Widgets.margins(dirHint, 0, Theme.dp(this, 7), 0, 0);
-        form.addView(dirHint);
+        form.addView(hint("Pre-filled when you start a new project. Sessions take their "
+                + "directory from the project they are in.", Theme.MUTED));
 
-        form.addView(spacer(28));
-        TextView worktreeSection = Widgets.text(this, "Worktrees", Theme.ACCENT_STRONG, 12, true);
-        worktreeSection.setAllCaps(true);
-        worktreeSection.setLetterSpacing(0.06f);
-        form.addView(worktreeSection);
-        form.addView(spacer(12));
-
+        form.addView(spacer(20));
         form.addView(label("Worktree path template"));
         templateField = field(prefs.worktreeTemplate(), WorktreePath.DEFAULT_TEMPLATE,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI, true);
         form.addView(templateField);
-        TextView templateHint = Widgets.text(this,
-                "Fills in the directory when you create a worktree; you can still "
-                        + "edit it there.\n"
-                        + "%P  the project's parent directory\n"
+        form.addView(hint("Fills in the directory when you create a worktree; you can still "
+                + "edit it there.", Theme.MUTED));
+        TextView legend = Widgets.mono(this,
+                "%P  the project's parent directory\n"
                         + "%N  the project directory's own name\n"
                         + "%B  the branch, slashes turned into dashes\n"
                         + "%b  the branch exactly as typed",
-                Theme.MUTED, 12.5f, false);
-        Widgets.margins(templateHint, 0, Theme.dp(this, 7), 0, 0);
-        form.addView(templateHint);
+                Theme.MUTED, 12);
+        Widgets.margins(legend, 0, Theme.dp(this, 7), 0, 0);
+        form.addView(legend);
 
         form.addView(spacer(12));
         templatePreview = Widgets.mono(this, "", Theme.MUTED, 13);
@@ -214,65 +204,47 @@ public class SettingsActivity extends Activity {
         templatePreview.setLayoutParams(lp(MATCH, WRAP));
         form.addView(templatePreview);
 
-        form.addView(spacer(24));
+        // ---- other screens ----
+        // These navigate away and save on their own, so they sit apart from
+        // the fields the Save footer applies to.
+        addSection(form, "More");
+
+        form.addView(navRow("Server sandbox paths",
+                "Shared defaults on the saved server, saved separately from this device.",
+                v -> {
+                    // The remote editor always uses the saved connection, never a partially edited address.
+                    if (!prefs.isConfigured()
+                            || !hostField.getText().toString().trim().equals(prefs.host())
+                            || !portField.getText().toString().trim().equals(String.valueOf(prefs.port()))
+                            || tlsSwitch.isChecked() != prefs.tls()) {
+                        toast("Save the server address first, then reopen Settings.");
+                        return;
+                    }
+                    startActivity(new android.content.Intent(this, SandboxPathsActivity.class));
+                }));
+        form.addView(spacer(10));
+        // No count here: the archive lives on the server, and fetching both
+        // listings to put a number on a menu row would not earn the round trip.
+        form.addView(navRow("Archived projects and sessions",
+                "Work you've filed away. Still readable, and restorable.",
+                v -> startActivity(new android.content.Intent(this, ArchivedActivity.class))));
+
+        scroll.addView(form);
+        root.addView(scroll);
+
+        // ---- save footer, always in reach ----
+        View footerDiv = new View(this);
+        footerDiv.setLayoutParams(lp(MATCH, Math.max(1, Theme.dp(this, 0.5f))));
+        footerDiv.setBackgroundColor(Theme.LINE_SOFT);
+        root.addView(footerDiv);
+        LinearLayout footer = Widgets.column(this);
+        footer.setPadding(pad, Theme.dp(this, 12), pad, Theme.dp(this, 12));
         TextView save = Widgets.primaryButton(this, "Save");
         save.setMinimumHeight(Theme.dp(this, 48));
         save.setLayoutParams(lp(MATCH, WRAP));
         save.setOnClickListener(v -> save());
-        form.addView(save);
-
-        form.addView(spacer(28));
-        TextView sandboxPaths = Widgets.ghostButton(this, "Server sandbox paths ›");
-        sandboxPaths.setOnClickListener(v -> {
-            // The remote editor always uses the saved connection, never a partially edited address.
-            if (!prefs.isConfigured()
-                    || !hostField.getText().toString().trim().equals(prefs.host())
-                    || !portField.getText().toString().trim().equals(String.valueOf(prefs.port()))
-                    || tlsSwitch.isChecked() != prefs.tls()) {
-                toast("Save the server address first, then reopen Settings.");
-                return;
-            }
-            startActivity(new android.content.Intent(this, SandboxPathsActivity.class));
-        });
-        form.addView(sandboxPaths);
-        form.addView(Widgets.text(this, "Edit shared defaults on the saved server. Saved separately from device preferences.",
-                Theme.MUTED, 12.5f, false));
-
-        // ---- archived ----
-        // Below Save, because it navigates away rather than editing the form
-        // the button belongs to.
-        form.addView(spacer(28));
-        TextView archivedSection = Widgets.text(this, "Archived", Theme.ACCENT_STRONG, 12, true);
-        archivedSection.setAllCaps(true);
-        archivedSection.setLetterSpacing(0.06f);
-        form.addView(archivedSection);
-        form.addView(spacer(12));
-
-        LinearLayout archivedRow = Widgets.row(this);
-        archivedRow.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
-        int ap = Theme.dp(this, 14);
-        archivedRow.setPadding(ap, ap, ap, ap);
-        archivedRow.setLayoutParams(lp(MATCH, WRAP));
-        archivedRow.setClickable(true);
-        archivedRow.setOnClickListener(v ->
-                startActivity(new android.content.Intent(this, ArchivedActivity.class)));
-        LinearLayout archivedText = Widgets.column(this);
-        archivedText.setLayoutParams(lp(0, WRAP, 1f));
-        archivedText.addView(Widgets.text(this, "Archived projects and sessions",
-                Theme.INK, 15, false));
-        // No count here: the archive lives on the server, and fetching both
-        // listings to put a number on a menu row would not earn the round trip.
-        TextView archivedHint = Widgets.text(this,
-                "Work you've filed away. Still readable, and restorable.",
-                Theme.MUTED, 12.5f, false);
-        Widgets.margins(archivedHint, 0, Theme.dp(this, 3), 0, 0);
-        archivedText.addView(archivedHint);
-        archivedRow.addView(archivedText);
-        archivedRow.addView(Widgets.text(this, "›", Theme.FAINT, 20, false));
-        form.addView(archivedRow);
-
-        scroll.addView(form);
-        root.addView(scroll);
+        footer.addView(save);
+        root.addView(footer);
 
         // live preview updates
         android.text.TextWatcher watcher = new android.text.TextWatcher() {
@@ -423,7 +395,56 @@ public class SettingsActivity extends Activity {
         return t;
     }
 
+    /**
+     * A tappable card that opens another screen: title, one-line hint, chevron.
+     */
+    private View navRow(String title, String hint, View.OnClickListener onClick) {
+        LinearLayout row = Widgets.row(this);
+        row.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
+        int p = Theme.dp(this, 14);
+        row.setPadding(p, p, p, p);
+        row.setLayoutParams(lp(MATCH, WRAP));
+        row.setClickable(true);
+        row.setOnClickListener(onClick);
+        LinearLayout text = Widgets.column(this);
+        text.setLayoutParams(lp(0, WRAP, 1f));
+        text.addView(Widgets.text(this, title, Theme.INK, 15, false));
+        TextView h = Widgets.text(this, hint, Theme.MUTED, 12.5f, false);
+        Widgets.margins(h, 0, Theme.dp(this, 3), 0, 0);
+        text.addView(h);
+        row.addView(text);
+        row.addView(Widgets.text(this, "›", Theme.FAINT, 20, false));
+        return row;
+    }
+
     /* ---------------------------------------------------------------- */
+
+    /**
+     * A section header, preceded by a divider unless it opens the form. Leaves
+     * the gap before the section's first control.
+     */
+    private void addSection(LinearLayout form, String title) {
+        if (form.getChildCount() > 0) {
+            form.addView(spacer(24));
+            View div = new View(this);
+            div.setLayoutParams(lp(MATCH, Math.max(1, Theme.dp(this, 0.5f))));
+            div.setBackgroundColor(Theme.LINE_SOFT);
+            form.addView(div);
+            form.addView(spacer(20));
+        }
+        TextView t = Widgets.text(this, title, Theme.ACCENT_STRONG, 12, true);
+        t.setAllCaps(true);
+        t.setLetterSpacing(0.06f);
+        form.addView(t);
+        form.addView(spacer(12));
+    }
+
+    /** Explanatory text under a control. */
+    private TextView hint(String s, int color) {
+        TextView t = Widgets.text(this, s, color, 12.5f, false);
+        Widgets.margins(t, 0, Theme.dp(this, 7), 0, 0);
+        return t;
+    }
 
     private TextView label(String s) {
         TextView t = Widgets.text(this, s, Theme.MUTED, 13, true);
