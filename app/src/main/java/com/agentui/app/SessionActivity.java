@@ -151,6 +151,11 @@ public class SessionActivity extends Activity {
      */
     private boolean archived;
     private LinearLayout composerHolder; // swaps between the composer and that notice
+    // Accepted inputs still waiting for a turn, shown above the composer and
+    // kept out of the transcript until the server ships them.
+    private final MessageQueue messageQueue = new MessageQueue();
+    private View pendingPanel;
+    private LinearLayout pendingList;
 
     // socket
     private WebSocket socket;
@@ -275,6 +280,7 @@ public class SessionActivity extends Activity {
                     autoApproveInterAgent = session.autoApproveInterAgent;
                     applyArchived(session.isArchived());
                     applyStatus(session.status);
+                    renderPending();
                     if (projectDir == null && !projectId.isEmpty()) loadProjectPath();
                     else renderLocation();
                     // Notification intents may initially carry only id/name, so
@@ -459,6 +465,21 @@ public class SessionActivity extends Activity {
         // ---- composer ----
         LinearLayout footer = Widgets.column(this);
         footer.setPadding(pad, Theme.dp(this, 8), pad, pad);
+
+        // Queued messages: capped so a long queue scrolls rather than
+        // squeezing the transcript away.
+        final int pendingMax = Theme.dp(this, 168);
+        android.widget.ScrollView pendingScroll = new android.widget.ScrollView(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                super.onMeasure(widthSpec,
+                        View.MeasureSpec.makeMeasureSpec(pendingMax, View.MeasureSpec.AT_MOST));
+            }
+        };
+        pendingList = Widgets.column(this);
+        pendingScroll.addView(pendingList);
+        pendingScroll.setVisibility(View.GONE);
+        pendingPanel = pendingScroll;
+        footer.addView(pendingScroll, lp(MATCH, WRAP));
 
         activity = Widgets.text(this, "", Theme.MUTED, 12.5f, false);
         Widgets.margins(activity, Theme.dp(this, 6), 0, 0, Theme.dp(this, 8));
@@ -1226,8 +1247,8 @@ public class SessionActivity extends Activity {
             WatchService.watch(this, sessionId, sessionName, s);
         }
         // The composer stays live while the agent works: a `!` command never
-        // takes the server's turn lock, so it can run mid-turn. A prompt sent
-        // now is turned away in sendPrompt() with a toast instead.
+        // takes the server's turn lock, and a prompt sent now is queued
+        // server-side for the next turn.
         stopBtn.setVisibility(busy ? View.VISIBLE : View.GONE);
 
         if ("running".equals(s)) {
@@ -1282,6 +1303,9 @@ public class SessionActivity extends Activity {
         // history from that authoritative stream just as the transcript is.
         messageHistory.clear();
         pendingHistoryEchoes.clear();
+        // Likewise the queue: the replay re-accepts and re-ships, then the
+        // input_queue snapshot settles what is still pending.
+        messageQueue.clear();
 
         if (firstConnect) {
             // First open: stream the replay straight into the (empty) visible
@@ -1375,6 +1399,7 @@ public class SessionActivity extends Activity {
         scroll.addView(replayBuffer);
         transcript = replayBuffer;
         replayBuffer = null;
+        renderPending();
     }
 
     private void handleMessage(String raw) {
@@ -1423,17 +1448,19 @@ public class SessionActivity extends Activity {
                 SessionState.get(api, sessionId).reasoningLevel(msg.optString("reasoning_level"));
                 break;
             case "input":
-                agentBubble = null;
-                String prompt = msg.optString("text", "");
-                InterAgent.Source source = InterAgent.source(msg);
-                if (source.isUser()) {
-                    acceptHistoryEcho(MessageHistory.promptEntry(prompt));
-                    addUserMessage(prompt);
-                } else {
-                    // Another agent's words: kept out of composer history,
-                    // which only recalls what the user typed.
-                    addAgentMessage(prompt, source);
+                acceptInput(msg);
+                break;
+            case "inputs_shipped":
+                shipInputs(msg);
+                break;
+            case "input_queue":
+                try {
+                    messageQueue.replace(msg);
+                } catch (IllegalArgumentException e) {
+                    agentBubble = null;
+                    addError("Unsupported message queue snapshot: " + e.getMessage());
                 }
+                renderPending();
                 break;
             case "output":
                 addAgentOutput(msg.optString("text", ""));
@@ -1477,6 +1504,99 @@ public class SessionActivity extends Activity {
             default:
                 break;
         }
+    }
+
+    /**
+     * An accepted input. Queued ones wait in the pending list and leave the
+     * transcript alone, so a reply still streaming is not split by them.
+     */
+    private void acceptInput(JSONObject msg) {
+        MessageQueue.Accepted accepted;
+        try {
+            accepted = messageQueue.accept(msg);
+        } catch (IllegalArgumentException e) {
+            agentBubble = null;
+            addError("Unsupported input event: " + e.getMessage());
+            return;
+        }
+        if (accepted == MessageQueue.Accepted.DUPLICATE) return;
+        String prompt = msg.optString("text", "");
+        InterAgent.Source source = InterAgent.source(msg);
+        // Acceptance is the echo; shipping never touches history. Another
+        // agent's words stay out of it, as history recalls what the user typed.
+        if (source.isUser()) acceptHistoryEcho(MessageHistory.promptEntry(prompt));
+        if (accepted == MessageQueue.Accepted.QUEUED) {
+            renderPending();
+            return;
+        }
+        agentBubble = null;
+        addInputMessage(prompt, source);
+    }
+
+    /** A batch handed to a turn: one transcript row per message, in order. */
+    private void shipInputs(JSONObject msg) {
+        List<MessageQueue.Message> rows;
+        try {
+            rows = messageQueue.ship(msg);
+        } catch (IllegalArgumentException e) {
+            agentBubble = null;
+            addError("Unsupported shipped messages: " + e.getMessage());
+            return;
+        }
+        // The turn's output starts after these rows, in a bubble of its own.
+        agentBubble = null;
+        for (MessageQueue.Message m : rows) addInputMessage(m.text, m.source);
+        renderPending();
+    }
+
+    private void addInputMessage(String text, InterAgent.Source source) {
+        if (source.isUser()) addUserMessage(text);
+        else addAgentMessage(text, source);
+    }
+
+    /**
+     * Redraw the pending list. A reconnect's replay rebuilds the queue off
+     * screen with the transcript, so the old list stays up until the swap.
+     */
+    private void renderPending() {
+        if (pendingList == null || awaitingReplay) return;
+        pendingList.removeAllViews();
+        List<MessageQueue.Message> messages = messageQueue.pending();
+        for (MessageQueue.Message m : messages) {
+            LinearLayout.LayoutParams p = lp(MATCH, WRAP);
+            p.bottomMargin = Theme.dp(this, 6);
+            pendingList.addView(pendingRow(m), p);
+        }
+        pendingPanel.setVisibility(messages.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    /** A queued message, compact and dimmed: waiting, not yet part of the conversation. */
+    private View pendingRow(MessageQueue.Message m) {
+        boolean user = m.source.isUser();
+        LinearLayout row = Widgets.column(this);
+        row.setBackground(Theme.rounded(this, Theme.PANEL, 12,
+                user ? Theme.ACCENT_LINE : Theme.INFO_LINE, 1));
+        int p = Theme.dp(this, 10);
+        row.setPadding(p, Theme.dp(this, 6), p, Theme.dp(this, 8));
+
+        LinearLayout head = Widgets.row(this);
+        TextView label = Widgets.text(this, "QUEUED", Theme.FAINT, 10, true);
+        label.setLetterSpacing(0.08f);
+        Widgets.margins(label, 0, 0, Theme.dp(this, 8), 0);
+        head.addView(label);
+        if (!user) {
+            LinearLayout sender = Widgets.row(this);
+            renderSender(sender, m.source);
+            head.addView(sender, lp(0, WRAP, 1f));
+        }
+        row.addView(head);
+
+        TextView body = Widgets.text(this, m.text, Theme.MUTED, 13.5f, false);
+        body.setMaxLines(3);
+        body.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        Widgets.margins(body, 0, Theme.dp(this, 3), 0, 0);
+        row.addView(body);
+        return row;
     }
 
     /** Add a replay/live entry unless it is the echo of our own successful send. */
@@ -2642,10 +2762,6 @@ public class SessionActivity extends Activity {
     /* sending                                                          */
     /* ---------------------------------------------------------------- */
 
-    private boolean isBusy() {
-        return "running".equals(status) || "awaiting_approval".equals(status);
-    }
-
     private void sendPrompt() {
         // The composer is off screen while archived, but the IME's send action
         // can still reach here from a detached-but-focused input.
@@ -2667,14 +2783,8 @@ public class SessionActivity extends Activity {
                             android.widget.Toast.LENGTH_SHORT).show();
                     return;
                 }
-                if (isBusy()) {
-                    // Rejected, but the text stays put: it is still worth sending
-                    // once the turn ends, and it may be what you meant to run.
-                    android.widget.Toast.makeText(this,
-                            "The agent is busy — wait for the turn to finish, or prefix with ! to run a command",
-                            android.widget.Toast.LENGTH_LONG).show();
-                    return;
-                }
+                // Not gated on status either: mid-turn, the server queues it
+                // for the next turn and echoes it into the pending list.
                 out.put("type", "input");
                 out.put("text", parsed.text);
             }

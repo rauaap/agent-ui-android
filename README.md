@@ -95,7 +95,10 @@ Device smoke checks before release:
   prompt for writes and/or shell commands; auto-approved tools still appear in the
   transcript, marked as such. Reads always run.
 - **Composer** — send prompts. Stays usable while the agent is running: a prompt
-  sent mid-turn is refused with a toast, but a command still goes through. Up and
+  sent mid-turn is queued by the server for the next turn and waits, marked
+  **QUEUED**, above the composer — out of the transcript, so it never splits a
+  streaming reply — until the server hands it to a turn. Messages from other
+  agents queue the same way. A command runs immediately as always. Up and
   Down keys walk the session's prompt and command history when a keyboard offers
   them; otherwise, hold the composer and drag vertically. A stationary hold and
   release retains the normal text-selection menu, and moving past the newest
@@ -437,7 +440,9 @@ client -> server : { type: "input", text }
                    { type: "question_response", request_id, answers }
 
 server -> client : { type: "status",           status }   # idle | running | awaiting_approval
-                   { type: "input",            text }
+                   { type: "input",            message_id, text, source, delivery }  # "queued"
+                   { type: "inputs_shipped",   messages: [{ message_id, text, source, delivery }] }
+                   { type: "input_queue",      messages: [{ message_id, text, source, delivery }] }
                    { type: "output",           text }
                    { type: "bash_input",       command }
                    { type: "bash_output",      command, stdout, stderr, exit_code,
@@ -466,6 +471,22 @@ composer is taken away rather than left to collect text that can only bounce.
 `worktree_detached` updates the cwd and location display but is not replayed on
 connect, so the unfiltered REST session listing remains authoritative after an
 offline detach; duplicate events from retries are harmless.
+
+**Message queue.** Every ordinary message, the user's or another agent's, goes
+through one server-owned queue, so the composer is not gated on status. An
+`input` with `delivery: "queued"` is the acceptance: it joins the pending list
+above the composer and touches neither the transcript nor a streaming reply.
+A user's acceptance is the composer-history echo; an agent's never is.
+`inputs_shipped` is the delivery boundary: its messages leave the pending list
+and become one transcript row each, in array order, and the next output starts a
+new bubble. It carries full contents, so a message whose acceptance fell out of
+the replay window still ships; shipping never touches history. After the replay
+and before `status`, `input_queue` replaces the whole pending list — it is
+authoritative, not a transcript event. All three are keyed by `message_id`;
+the app ignores a message it has already shown. Replayed `input` rows without
+`delivery` predate the queue and render where they stand. Stop, failure and
+restart keep pending messages until the next idle submission ships them along
+with it; there is no edit or cancel.
 
 `question` / `question_response` cover Claude Code's **AskUserQuestion** tool — a
 multiple-choice prompt the client renders as selectable options, sending the
