@@ -28,6 +28,8 @@ import okhttp3.ResponseBody;
  *   GET    /usage
  *   GET    /sandbox-paths
  *   PATCH  /sandbox-paths
+ *   GET    /sandbox-network
+ *   PATCH  /sandbox-network
  *   GET    /projects
  *   POST   /projects
  *   PATCH  /projects
@@ -140,6 +142,21 @@ final class Api {
                 .patch(RequestBody.create(SandboxPath.replacement(projectPath, paths).toString(), JSON))
                 .build();
         enqueue(req, cb, body -> SandboxPath.from(new JSONObject(body).getJSONArray("sandbox_paths")));
+    }
+
+    void getSandboxNetwork(Cb<List<SandboxNetworkDestination>> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/sandbox-network").get().build();
+        enqueue(req, cb, body -> SandboxNetworkDestination.from(
+                new JSONObject(body).getJSONArray("sandbox_network_allowlist")));
+    }
+
+    /** Atomic server-wide replacement; the response is the normalized saved list. */
+    void saveSandboxNetwork(List<SandboxNetworkDestination> entries, Cb<List<SandboxNetworkDestination>> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/sandbox-network")
+                .patch(RequestBody.create(SandboxNetworkDestination.replacement(entries).toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> SandboxNetworkDestination.from(
+                new JSONObject(body).getJSONArray("sandbox_network_allowlist")));
     }
 
     void listProjects(Cb<List<Project>> cb) {

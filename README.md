@@ -187,6 +187,18 @@ Device smoke checks before release:
   Changes affect future sandboxed turns, never running processes. Read-only paths
   can expose credentials; writable paths permit changes or deletion of host data.
 
+- **Sandbox network** — open **Settings ▸ Server sandbox network** beside sandbox
+  paths. Load, add/edit/remove exact IPv4 + TCP port pairs, then **Save exceptions**
+  to replace the server-wide list via `GET/PATCH /sandbox-network` with
+  `{"sandbox_network_allowlist": [{"ip": "100.64.0.10", "port": 443}]}`.
+  Clearing and saving sends `[]`. The normalized response becomes the saved list;
+  API errors retain the draft. Ports must be integers 1–65535; the server enforces
+  unicast IPv4 policy (no hostnames, CIDRs, IPv6, loopback, unspecified, reserved,
+  multicast, or sandbox DNS proxy address). Only the specified TCP port is exposed,
+  even if Gitea and agent-ui-server share an IP; other ports and UDP stay blocked.
+  Changes affect new sandboxed turns for both agents, not running turns. There are
+  no project/session overrides; an empty list means no private-network exceptions.
+
 ## Layout
 
 ```
@@ -212,6 +224,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `ProjectSettingsActivity.java` | per-project settings: sandbox paths, archive / unarchive |
 | `SettingsActivity.java`    | server address + projects directory form (persisted) + the way in to Archived |
 | `SandboxPathsActivity.java` | shared server/project sandbox-path editor with inheritance and atomic saves |
+| `SandboxNetworkActivity.java` | server-wide IPv4 + TCP port editor with atomic saves |
 | `SandboxPath.java` | original path strings, permissions, and whole-list payloads |
 | `ArchivedActivity.java`    | everything archived: projects, then the sessions under live projects, each with Restore |
 | `UsageActivity.java`       | subscription usage: a meter per plan per window, polled about once a minute |
