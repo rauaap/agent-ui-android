@@ -116,7 +116,7 @@ public class SandboxPathsActivity extends Activity {
                 + "Enter an absolute path, ~, ~user, $VAR or ${VAR}; expansion uses the server's "
                 + "home and environment. No shell expressions or wildcards. Directory contents are exposed.", 0));
         form.addView(note(projectPath == null
-                ? "Changes apply to new turns across all sandboxed sessions (Pi and Claude)."
+                ? "Changes apply to new turns across all sandboxed sessions."
                 : "Changes apply to new turns in this project's sandboxed sessions and worktrees. "
                     + "Project paths override matching server defaults. Clearing this list restores "
                     + "inheritance; inherited paths cannot be excluded.", 8));

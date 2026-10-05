@@ -95,8 +95,8 @@ public class SandboxNetworkActivity extends Activity {
                 + "allow only the needed service port; add HTTPS and SSH separately."));
         form.addView(note("No hostnames, CIDRs, IPv6, loopback, unspecified, reserved or multicast addresses, "
                 + "or 169.254.0.53 (sandbox DNS proxy). The server validates destinations."));
-        form.addView(note("Changes apply to newly launched sandboxed turns across all projects and sessions "
-                + "for both Pi and Claude. Running turns retain their rules. Empty means no private-network exceptions."));
+        form.addView(note("Changes apply to newly launched sandboxed turns across all projects and sessions. "
+                + "Running turns retain their rules. Empty means no private-network exceptions."));
         form.addView(Widgets.spacer(this, 16));
         entries = Widgets.column(this);
         form.addView(entries);
