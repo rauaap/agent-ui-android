@@ -159,6 +159,30 @@ final class Api {
                 new JSONObject(body).getJSONArray("sandbox_network_allowlist")));
     }
 
+    void listSharedAssetRoots(Cb<List<SharedAssetRoot>> cb) {
+        Request req = new Request.Builder().url(SharedAssetRoot.endpoint(prefs.httpBase(), null)).get().build();
+        enqueue(req, cb, body -> SharedAssetRoot.list(new JSONArray(body)));
+    }
+
+    void createSharedAssetRoot(String name, String path, String projectId, Cb<SharedAssetRoot> cb) {
+        Request req = new Request.Builder().url(SharedAssetRoot.endpoint(prefs.httpBase(), null))
+                .post(RequestBody.create(SharedAssetRoot.createPayload(name, path, projectId).toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> SharedAssetRoot.from(new JSONObject(body)));
+    }
+
+    void updateSharedAssetRoot(String oldName, String name, String path, Cb<SharedAssetRoot> cb) {
+        Request req = new Request.Builder().url(SharedAssetRoot.endpoint(prefs.httpBase(), oldName))
+                .patch(RequestBody.create(SharedAssetRoot.editPayload(name, path).toString(), JSON))
+                .build();
+        enqueue(req, cb, body -> SharedAssetRoot.from(new JSONObject(body)));
+    }
+
+    void deleteSharedAssetRoot(String name, Cb<Void> cb) {
+        Request req = new Request.Builder().url(SharedAssetRoot.endpoint(prefs.httpBase(), name)).delete().build();
+        enqueue(req, cb, body -> null);
+    }
+
     void listProjects(Cb<List<Project>> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/projects").get().build();
         enqueue(req, cb, body -> {

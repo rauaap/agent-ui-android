@@ -105,6 +105,12 @@ public class ProjectSettingsActivity extends Activity {
         sandboxPaths.setOnClickListener(v -> startActivity(new Intent(this, SandboxPathsActivity.class)
                 .putExtra(SandboxPathsActivity.EXTRA_PROJECT_PATH, projectDir)));
         form.addView(sandboxPaths);
+        form.addView(spacer(12));
+        TextView sharedAssets = Widgets.ghostButton(this, "Project shared assets ›");
+        sharedAssets.setEnabled(projectDir != null);
+        sharedAssets.setOnClickListener(v -> startActivity(new Intent(this, SharedAssetsActivity.class)
+                .putExtra(SharedAssetsActivity.EXTRA_PROJECT_PATH, projectDir)));
+        form.addView(sharedAssets);
         form.addView(spacer(28));
         form.addView(section("Archive"));
         form.addView(spacer(12));

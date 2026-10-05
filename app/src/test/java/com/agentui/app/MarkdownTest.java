@@ -97,6 +97,14 @@ public class MarkdownTest {
     }
 
     @Test
+    public void sharedAssetLinkKeepsRelativeTarget() {
+        Markdown.Doc d = parse("[Report](/shared-assets/notes/report/)");
+        Markdown.Span link = only(d, Markdown.Type.LINK);
+        assertEquals("Report", sub(d, link));
+        assertEquals("/shared-assets/notes/report/", link.href);
+    }
+
+    @Test
     public void mdnLinkKeepsFullHttpsTarget() {
         String url = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference#reference";
         Markdown.Doc d = parse("See [**MDN**](" + url + ").");

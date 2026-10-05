@@ -55,6 +55,11 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
         <activity
+            android:name=".SharedAssetsActivity"
+            android:enableOnBackInvokedCallback="true"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".ProjectSettingsActivity"
             android:exported="false" />
         <activity

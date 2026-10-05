@@ -199,6 +199,19 @@ Device smoke checks before release:
   Changes affect new sandboxed turns for both agents, not running turns. There are
   no project/session overrides; an empty list means no private-network exceptions.
 
+- **Shared assets** — open **Settings ▸ Server shared assets** for global roots,
+  or **Project settings ▸ Project shared assets** for project-associated roots.
+  Add/edit (including rename)/delete registrations via `/shared-asset-roots`;
+  changes save immediately. Identifiers use ASCII letters, digits, `_` and `-`;
+  paths are absolute server paths and are not expanded or created. The server's
+  normalized response is reloaded after saving. Registration does not grant
+  sandbox access or copy files, and deletion never removes files. Renaming breaks
+  existing links. Anyone who can reach the server can read registered files
+  without authentication; project association only organizes settings.
+  **Open** targets the root's `index.html` (404 if missing). Chat Markdown links
+  beginning with `/shared-assets/` open against the saved server's origin,
+  including its scheme and port; ordinary HTTP(S) links still open unchanged.
+
 ## Layout
 
 ```
@@ -221,10 +234,13 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WorktreeForm.java`        | the create-worktree dialog, shared by the picker and that list |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
 | `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, reasoning level, auto-approve toggles, archive |
-| `ProjectSettingsActivity.java` | per-project settings: sandbox paths, archive / unarchive |
+| `ProjectSettingsActivity.java` | per-project settings: sandbox paths, shared assets, archive / unarchive |
 | `SettingsActivity.java`    | server address + projects directory form (persisted) + the way in to Archived |
 | `SandboxPathsActivity.java` | shared server/project sandbox-path editor with inheritance and atomic saves |
 | `SandboxNetworkActivity.java` | server-wide IPv4 + TCP port editor with atomic saves |
+| `SharedAssetsActivity.java` | global/project shared-asset root CRUD, rename and browser Open |
+| `SharedAssetRoot.java` | shared-asset registrations, scope filtering and request payloads |
+| `MarkdownLinks.java` | selectable chat link tap handling and shared-asset URL resolution |
 | `SandboxPath.java` | original path strings, permissions, and whole-list payloads |
 | `ArchivedActivity.java`    | everything archived: projects, then the sessions under live projects, each with Restore |
 | `UsageActivity.java`       | subscription usage: a meter per plan per window, polled about once a minute |

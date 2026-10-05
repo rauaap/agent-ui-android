@@ -236,6 +236,19 @@ public class SettingsActivity extends Activity {
                     startActivity(new android.content.Intent(this, SandboxNetworkActivity.class));
                 }));
         form.addView(spacer(10));
+        form.addView(navRow("Server shared assets",
+                "Global directory registrations and browser links, saved on the server.",
+                v -> {
+                    if (!prefs.isConfigured()
+                            || !hostField.getText().toString().trim().equals(prefs.host())
+                            || !portField.getText().toString().trim().equals(String.valueOf(prefs.port()))
+                            || tlsSwitch.isChecked() != prefs.tls()) {
+                        toast("Save the server address first, then reopen Settings.");
+                        return;
+                    }
+                    startActivity(new android.content.Intent(this, SharedAssetsActivity.class));
+                }));
+        form.addView(spacer(10));
         // No count here: the archive lives on the server, and fetching both
         // listings to put a number on a menu row would not earn the round trip.
         form.addView(navRow("Archived projects and sessions",
