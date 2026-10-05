@@ -83,7 +83,7 @@ final class SessionState {
     }
     boolean canSaveSandbox() {
         return connected && loaded && !saving && !approvalSaving && session != null
-                && Agent.supportsSandbox(session.agent) && session.sandbox != null
+                && session.sandbox != null
                 && "idle".equals(session.status);
     }
 }

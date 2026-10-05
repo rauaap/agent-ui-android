@@ -50,11 +50,6 @@ final class Agent {
         return null;
     }
 
-    /** Execution support on current servers; an absent session field is still unknown. */
-    static boolean supportsSandbox(String id) {
-        return "pi".equals(id) || "claude-code".equals(id);
-    }
-
     /** Parses the whole {@code GET /agents} body, keeping the server's order. */
     static List<Agent> list(JSONArray arr) throws JSONException {
         List<Agent> out = new ArrayList<>();

@@ -725,7 +725,6 @@ public class SessionListActivity extends Activity {
         sandboxSection.addView(Widgets.text(this,
                 "Restricts agent file access. Applies to agent turns, not direct shell commands.",
                 Theme.MUTED, 12.5f, false));
-        sandboxSection.setVisibility(Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? View.VISIBLE : View.GONE);
         // ---- model ----
         // Scoped to the chosen agent and always explicit: the first model in
         // its catalog is preselected, and any switch of agent starts over from
@@ -795,7 +794,6 @@ public class SessionListActivity extends Activity {
                         refreshCreate.run();
                     }
                     agent.setText(agentLabels[which]);
-                    sandboxSection.setVisibility(Agent.supportsSandbox(choices.get(which).id) ? View.VISIBLE : View.GONE);
                     d.dismiss();
                 })
                 .setNegativeButton("Cancel", null)
@@ -858,7 +856,7 @@ public class SessionListActivity extends Activity {
                 refreshCreate.run();
                 api.createSession(name, dir, choices.get(agentIdx[0]).id, modelId[0],
                         reasoningLevel[0], worktreeId[0],
-                        Agent.supportsSandbox(choices.get(agentIdx[0]).id) ? sandbox.isChecked() : null,
+                        sandbox.isChecked(),
                         new Api.StatusCb<Session>() {
                             @Override public void onResult(Session session) {
                                 api.prefs().setNotify(session.id, true);

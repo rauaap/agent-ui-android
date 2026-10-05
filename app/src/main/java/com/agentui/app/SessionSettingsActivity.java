@@ -132,10 +132,8 @@ public class SessionSettingsActivity extends Activity {
     private void renderState() {
         if (sandboxSwitch == null) return;
         Session s = state.session;
-        boolean supported = s != null && Agent.supportsSandbox(s.agent);
-        sandboxRow.setVisibility(supported && s.sandbox != null ? View.VISIBLE : View.GONE);
+        sandboxRow.setVisibility(View.VISIBLE);
         sandboxHint.setText(s == null ? "Loading session settings…"
-                : !supported ? "Sandbox not supported for this agent"
                 : s.sandbox == null ? "Sandbox unavailable on this server"
                 : "Restricts agent file access, not direct shell commands.\nSandbox can only be changed between turns.");
         setSwitchSilently(sandboxSwitch, s != null && Boolean.TRUE.equals(s.sandbox), this::applySandbox);

@@ -48,15 +48,8 @@ public class SandboxTest {
         assertEquals(Boolean.FALSE, state.session.sandbox);
     }
 
-    @Test public void onlyPiAndClaudeCodeSupportSandbox() {
-        assertTrue(Agent.supportsSandbox("pi"));
-        assertTrue(Agent.supportsSandbox("claude-code"));
-        assertFalse(Agent.supportsSandbox("opencode"));
-        assertFalse(Agent.supportsSandbox(null));
-    }
-
-    @Test public void controlRequiresConfirmedConnectedIdleSupportedAgent() throws Exception {
-        for (String agent : new String[]{"pi", "claude-code"}) checkControlGuards(agent);
+    @Test public void controlRequiresConfirmedConnectedIdleState() throws Exception {
+        for (String agent : new String[]{"pi", "claude-code", "other"}) checkControlGuards(agent);
     }
 
     private void checkControlGuards(String agent) throws Exception {
@@ -82,7 +75,7 @@ public class SandboxTest {
         state.connection(true);
         assertFalse(state.canSaveSandbox());
         state.accept(Session.from(new JSONObject("{\"id\":7,\"agent\":\"opencode\",\"sandbox\":true}")), SessionState.snapshot());
-        assertFalse(state.canSaveSandbox());
+        assertTrue(state.canSaveSandbox());
         assertEquals(Boolean.TRUE, state.session.sandbox);
         state.accept(Session.from(new JSONObject().put("id", 7).put("agent", agent)), SessionState.snapshot());
         assertFalse(state.canSaveSandbox());
