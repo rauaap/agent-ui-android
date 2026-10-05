@@ -2,7 +2,8 @@ package com.agentui.app;
 
 import org.json.JSONObject;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
@@ -16,9 +17,9 @@ import java.util.Locale;
  * {@code codex} onto an adapter or reads a session's agent as the quota it draws
  * from; both are labelled by plan.
  *
- * <p>Both keys are always present, and either can carry an {@code error} of its
- * own while the other reads fine — so each plan is read independently and a
- * non-null error never condemns the whole response.
+ * <p>Only enabled subscriptions are returned; either key can be omitted and
+ * an empty response means there are no enabled plans. A returned plan can carry
+ * an {@code error} while the other reads fine, so each is read independently.
  */
 final class Usage {
 
@@ -121,28 +122,46 @@ final class Usage {
         Trouble trouble() { return classify(error); }
 
         static Plan from(JSONObject response, String key, String label, long readAtMillis) {
-            JSONObject o = response == null ? null : response.optJSONObject(key);
+            if (response == null || !response.has(key)) return null;
+            JSONObject o = response.optJSONObject(key);
             String error = o == null || o.isNull("error") ? "" : o.optString("error", "");
             return new Plan(key, label, Window.from(o, "five_hour"), Window.from(o, "weekly"),
                     error, false, readAtMillis);
         }
     }
 
+    /** Null when this subscription was omitted by the server. */
     final Plan claudeCode;
     final Plan codex;
+    private final long responseReadAtMillis;
 
-    private Usage(Plan claudeCode, Plan codex) {
+    private Usage(Plan claudeCode, Plan codex, long responseReadAtMillis) {
         this.claudeCode = claudeCode;
         this.codex = codex;
+        this.responseReadAtMillis = responseReadAtMillis;
     }
 
-    /** Both plans, in the order the screen lists them. */
-    List<Plan> plans() { return Arrays.asList(claudeCode, codex); }
+    /** Only returned plans, in the order the screen lists them. */
+    List<Plan> plans() {
+        List<Plan> plans = new ArrayList<>(2);
+        if (claudeCode != null) plans.add(claudeCode);
+        if (codex != null) plans.add(codex);
+        return Collections.unmodifiableList(plans);
+    }
+
+    /** Latest displayed plan read, or the response time when no plans were returned. */
+    long readAtMillis() {
+        List<Plan> plans = plans();
+        if (plans.isEmpty()) return responseReadAtMillis;
+        long readAt = Long.MIN_VALUE;
+        for (Plan plan : plans) readAt = Math.max(readAt, plan.readAtMillis);
+        return readAt;
+    }
 
     static Usage from(JSONObject response, long readAtMillis) {
         return new Usage(
                 Plan.from(response, CLAUDE_CODE, "Claude Code", readAtMillis),
-                Plan.from(response, CODEX, "Codex", readAtMillis));
+                Plan.from(response, CODEX, "Codex", readAtMillis), readAtMillis);
     }
 
     /**
@@ -172,15 +191,17 @@ final class Usage {
      *
      * <p>Only transient failures carry over. An authentication state is news —
      * a plan that has just started reporting "not authenticated" should say so
-     * rather than keep showing numbers that no longer have a source.
+     * rather than keep showing numbers that no longer have a source. Omitted
+     * plans are removed, not treated as failures eligible for carry-over.
      */
     static Usage merge(Usage previous, Usage fresh) {
         if (previous == null) return fresh;
         return new Usage(carry(previous.claudeCode, fresh.claudeCode),
-                carry(previous.codex, fresh.codex));
+                carry(previous.codex, fresh.codex), fresh.responseReadAtMillis);
     }
 
     private static Plan carry(Plan previous, Plan fresh) {
+        if (fresh == null || previous == null) return fresh;
         if (fresh.hasWindows()) return fresh;
         if (!previous.hasWindows()) return fresh;
         if (fresh.trouble() != Trouble.TRANSIENT) return fresh;

@@ -42,6 +42,10 @@ public class UsageTest {
         assertEquals(6.0, usage.codex.fiveHour.usedPercent, 0.001);
         assertEquals(51.0, usage.codex.weekly.usedPercent, 0.001);
 
+        assertEquals(2, usage.plans().size());
+        assertSame(usage.claudeCode, usage.plans().get(0));
+        assertSame(usage.codex, usage.plans().get(1));
+        assertEquals(READ_AT, usage.readAtMillis());
         for (Usage.Plan plan : usage.plans()) {
             assertEquals(Usage.Trouble.NONE, plan.trouble());
             assertFalse(plan.stale);
@@ -78,15 +82,46 @@ public class UsageTest {
         assertEquals("", Usage.countdown(null, 1789933800L));
     }
 
-    /** A key the server omitted reads as "nothing reported", never as zero used. */
+    /** A plan omitted by the server must not have a card on screen. */
     @Test
     public void missingPlanIsNotZeroUsage() throws Exception {
         Usage usage = parse("{\"claude_code\":{\"five_hour\":{\"used_percent\":9.0,"
                 + "\"reset_at\":1789933800},\"weekly\":null,\"error\":null}}");
 
-        assertFalse(usage.codex.hasWindows());
-        assertNull(usage.codex.weekly);
-        assertEquals(Usage.Trouble.NONE, usage.codex.trouble());
+        assertNull(usage.codex);
+        assertEquals(1, usage.plans().size());
+        assertSame(usage.claudeCode, usage.plans().get(0));
+        assertEquals(READ_AT, usage.readAtMillis());
+    }
+
+    @Test
+    public void codexOnlyResponseHasOnlyCodex() throws Exception {
+        Usage usage = parse("{\"codex\":{\"error\":\"not authenticated\"}}");
+
+        assertNull(usage.claudeCode);
+        assertEquals(1, usage.plans().size());
+        assertSame(usage.codex, usage.plans().get(0));
+        assertEquals(Usage.Trouble.UNAUTHENTICATED, usage.codex.trouble());
+        assertEquals(READ_AT, usage.readAtMillis());
+    }
+
+    @Test
+    public void emptyResponseHasNoPlansButHasAReadTime() throws Exception {
+        Usage usage = parse("{}");
+
+        assertNull(usage.claudeCode);
+        assertNull(usage.codex);
+        assertTrue(usage.plans().isEmpty());
+        assertEquals(READ_AT, usage.readAtMillis());
+    }
+
+    @Test
+    public void returnedEmptyPlanIsStillPresent() throws Exception {
+        Usage usage = parse("{\"claude_code\":{}}");
+
+        assertEquals(1, usage.plans().size());
+        assertFalse(usage.claudeCode.hasWindows());
+        assertEquals(Usage.Trouble.NONE, usage.claudeCode.trouble());
     }
 
     @Test
@@ -160,6 +195,69 @@ public class UsageTest {
 
         assertEquals(88.0, merged.claudeCode.fiveHour.usedPercent, 0.001);
         assertFalse(merged.claudeCode.stale);
+    }
+
+    @Test
+    public void omittedPlansDisappearOnRefreshInEitherDirection() throws Exception {
+        Usage previous = parse(FULL);
+        for (String key : new String[] {Usage.CLAUDE_CODE, Usage.CODEX}) {
+            Usage fresh = parse("{\"" + key + "\":{\"error\":\"HTTP 503\"}}");
+            Usage merged = Usage.merge(previous, fresh);
+
+            assertEquals(1, merged.plans().size());
+            assertEquals(key, merged.plans().get(0).key);
+            assertTrue(merged.plans().get(0).stale);
+            assertEquals(READ_AT, merged.readAtMillis());
+            if (key.equals(Usage.CLAUDE_CODE)) assertNull(merged.codex);
+            else assertNull(merged.claudeCode);
+        }
+    }
+
+    @Test
+    public void emptyRefreshRemovesEvenStalePlans() throws Exception {
+        Usage previous = Usage.merge(parse(FULL), parse(
+                "{\"claude_code\":{\"error\":\"HTTP 503\"},"
+                + "\"codex\":{\"error\":\"HTTP 503\"}}"));
+        Usage fresh = Usage.from(new JSONObject("{}"), READ_AT + 60_000);
+        Usage merged = Usage.merge(previous, fresh);
+
+        assertNull(merged.claudeCode);
+        assertNull(merged.codex);
+        assertTrue(merged.plans().isEmpty());
+        assertEquals(READ_AT + 60_000, merged.readAtMillis());
+    }
+
+    @Test
+    public void newlyReturnedPlanHasNoOldValuesToCarry() throws Exception {
+        Usage merged = Usage.merge(parse("{}"),
+                parse("{\"codex\":{\"error\":\"HTTP 503\"}}"));
+
+        assertEquals(1, merged.plans().size());
+        assertFalse(merged.codex.stale);
+        assertFalse(merged.codex.hasWindows());
+        assertEquals(Usage.Trouble.TRANSIENT, merged.codex.trouble());
+    }
+
+    @Test
+    public void removedThenReturnedPlanDoesNotRecoverOldValues() throws Exception {
+        Usage empty = Usage.merge(parse(FULL), parse("{}"));
+        Usage merged = Usage.merge(empty,
+                parse("{\"claude_code\":{\"error\":\"HTTP 503\"}}"));
+
+        assertEquals(1, merged.plans().size());
+        assertFalse(merged.claudeCode.stale);
+        assertFalse(merged.claudeCode.hasWindows());
+    }
+
+    @Test
+    public void freshPlanReadTimeWinsWhileOtherPlanIsStale() throws Exception {
+        Usage fresh = Usage.from(new JSONObject(
+                "{\"claude_code\":{\"error\":\"HTTP 503\"},\"codex\":{}}"),
+                READ_AT + 60_000);
+        Usage merged = Usage.merge(parse(FULL), fresh);
+
+        assertEquals(READ_AT, merged.claudeCode.readAtMillis);
+        assertEquals(READ_AT + 60_000, merged.readAtMillis());
     }
 
     @Test

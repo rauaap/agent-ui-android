@@ -25,7 +25,7 @@ import static com.agentui.app.Widgets.lp;
  * quotas belong to <em>plans</em> and not to agents: one subscription can back
  * several harnesses, so no session's agent picks out a row here.
  *
- * <p>Each call queries both providers live, so this refreshes about once a
+ * <p>Each call queries enabled subscriptions live, so this refreshes about once a
  * minute while it is open — and every countdown on screen is recomputed from
  * the reset time that arrived with that read. Codex's five-hour window rolls
  * until usage starts, so counting one down locally would drift away from the
@@ -188,8 +188,12 @@ public class UsageActivity extends Activity {
         listContainer.removeAllViews();
         long nowSeconds = System.currentTimeMillis() / 1000L;
 
-        long readAt = Math.max(current.claudeCode.readAtMillis, current.codex.readAtMillis);
-        subtitle.setText("updated " + format(readAt, CLOCK_FMT));
+        subtitle.setText("updated " + format(current.readAtMillis(), CLOCK_FMT));
+
+        if (current.plans().isEmpty()) {
+            listContainer.addView(emptyBox("No subscription plans enabled on this server."));
+            return;
+        }
 
         for (Usage.Plan plan : current.plans()) {
             listContainer.addView(planCard(plan, nowSeconds));
