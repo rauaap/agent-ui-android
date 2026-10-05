@@ -11,6 +11,7 @@ import android.text.style.StrikethroughSpan;
 import android.text.style.StyleSpan;
 import android.text.style.TypefaceSpan;
 import android.text.style.UnderlineSpan;
+import android.text.style.URLSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.HorizontalScrollView;
@@ -583,6 +584,7 @@ final class Markdown {
     private static TextView proseView(Context ctx) {
         TextView t = Widgets.text(ctx, "", Theme.INK, 15, false);
         t.setTextIsSelectable(true);
+        MarkdownLinks.enable(t);
         t.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return t;
@@ -636,6 +638,7 @@ final class Markdown {
     private static TextView cellView(Context ctx, boolean header) {
         TextView t = Widgets.text(ctx, "", Theme.INK, 14, header);
         t.setTextIsSelectable(true);
+        MarkdownLinks.enable(t);
         t.setBackgroundColor(header ? Theme.PANEL_HOVER : Theme.PANEL);
         // long cells wrap inside their column instead of stretching the table
         t.setMaxWidth(Theme.dp(ctx, 280));
@@ -690,6 +693,9 @@ final class Markdown {
                             HEADING_SCALE[Math.max(1, Math.min(6, s.level)) - 1]), st, en);
                     break;
                 case LINK:
+                    if (MarkdownLinks.isWebUrl(s.href)) {
+                        span(sb, new URLSpan(s.href), st, en);
+                    }
                     span(sb, new ForegroundColorSpan(Theme.INFO), st, en);
                     span(sb, new UnderlineSpan(), st, en);
                     break;

@@ -97,6 +97,22 @@ public class MarkdownTest {
     }
 
     @Test
+    public void mdnLinkKeepsFullHttpsTarget() {
+        String url = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference#reference";
+        Markdown.Doc d = parse("See [**MDN**](" + url + ").");
+        Markdown.Span link = only(d, Markdown.Type.LINK);
+        assertEquals("MDN", sub(d, link));
+        assertEquals(url, link.href);
+    }
+
+    @Test
+    public void tableCellKeepsLinkTarget() {
+        Markdown.Doc d = parse("| Docs |\n| --- |\n| [MDN](https://developer.mozilla.org/) |");
+        Markdown.Doc cell = d.tables.get(0).rows.get(1)[0];
+        assertEquals("https://developer.mozilla.org/", only(cell, Markdown.Type.LINK).href);
+    }
+
+    @Test
     public void fencedCodeBlockKeepsContentDropsFences() {
         Markdown.Doc d = parse("```\nint x = 1;\nx++;\n```");
         assertEquals("int x = 1;\nx++;", d.text);
