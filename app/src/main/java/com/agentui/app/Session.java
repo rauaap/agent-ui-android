@@ -106,7 +106,7 @@ final class Session {
                 // null for a session that runs in the project directory, which
                 // Json.id reads as empty.
                 Json.id(o, "worktree_id"),
-                o.optString("agent", "claude-code"),
+                o.optString("agent", "Agent"),
                 o.optString("status", "idle"),
                 o.optString("last_active_at", ""),
                 // A live session reports archived_at: null, and optString would
