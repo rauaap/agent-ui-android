@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.TypedValue;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -58,38 +59,55 @@ public class SharedAssetsActivity extends Activity {
         LinearLayout header = Widgets.row(this);
         header.setPadding(pad, pad, pad, pad);
         TextView back = button("‹", this::onBackPressed);
+        back.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
         back.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
+        Widgets.margins(back, 0, 0, Theme.dp(this, 12), 0);
         header.addView(back);
-        LinearLayout headings = Widgets.column(this);
-        headings.setLayoutParams(lp(0, WRAP, 1f));
-        headings.addView(Widgets.text(this, "Shared assets", Theme.INK, 18, true));
-        headings.addView(Widgets.text(this, projectPath == null ? "Global roots" : "Project roots",
-                Theme.MUTED, 13, false));
-        TextView address = Widgets.mono(this, server, Theme.FAINT, 11.5f);
-        address.setSingleLine(true);
-        address.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        headings.addView(address);
-        header.addView(headings);
+        header.addView(Widgets.text(this, "Shared assets", Theme.INK, 18, true));
         root.addView(header);
+
+        View div = new View(this);
+        div.setLayoutParams(lp(MATCH, Math.max(1, Theme.dp(this, 0.5f))));
+        div.setBackgroundColor(Theme.LINE_SOFT);
+        root.addView(div);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setLayoutParams(lp(MATCH, 0, 1f));
         LinearLayout form = Widgets.column(this);
         form.setPadding(pad, pad, pad, pad);
-        if (projectPath != null) form.addView(Widgets.mono(this, projectPath, Theme.FAINT, 12));
+        form.addView(section(projectPath == null ? "Server" : "Project"));
+        form.addView(Widgets.spacer(this, 12));
+        form.addView(Widgets.mono(this, server, Theme.FAINT, 12));
+        if (projectPath != null) {
+            TextView path = Widgets.mono(this, projectPath, Theme.FAINT, 12);
+            Widgets.margins(path, 0, Theme.dp(this, 6), 0, 0);
+            form.addView(path);
+        }
+        form.addView(Widgets.spacer(this, 28));
+        form.addView(section("Sharing"));
+        form.addView(Widgets.spacer(this, 4));
         form.addView(note("Registered directories are served directly. Anyone who can reach the server can read "
                 + "their files without a token. Register only directories intended for sharing."));
         form.addView(note("Registration does not create directories, copy files, or grant sandbox access. "
                 + "Project association only organizes settings; it is not an access boundary."));
         form.addView(note("Open targets the root's index.html. If none exists, the browser shows 404. "
                 + "Renaming breaks existing links; deleting a registration never deletes files."));
+        form.addView(Widgets.spacer(this, 16));
+        form.addView(section(projectPath == null ? "Global roots" : "Project roots"));
+        form.addView(Widgets.spacer(this, 12));
         entries = Widgets.column(this);
         form.addView(entries);
-        add = button("+ Add root", () -> edit(null));
+        add = Widgets.primaryButton(this, "+ Add root");
+        add.setLayoutParams(lp(MATCH, WRAP));
+        add.setMinimumHeight(Theme.dp(this, 48));
+        add.setOnClickListener(v -> edit(null));
         form.addView(add);
+        form.addView(Widgets.spacer(this, 20));
         status = Widgets.text(this, "", Theme.MUTED, 12.5f, false);
         form.addView(status);
+        form.addView(Widgets.spacer(this, 12));
         refresh = button("Refresh", this::load);
+        refresh.setLayoutParams(lp(MATCH, WRAP));
         form.addView(refresh);
         scroll.addView(form);
         root.addView(scroll);
@@ -167,14 +185,23 @@ public class SharedAssetsActivity extends Activity {
                 card.addView(Widgets.text(this, entry.assetRoot, Theme.INK, 15, true));
                 TextView path = Widgets.mono(this, entry.path, Theme.FAINT, 12);
                 path.setTextIsSelectable(true);
+                Widgets.margins(path, 0, Theme.dp(this, 6), 0, Theme.dp(this, 6));
                 card.addView(path);
                 card.addView(Widgets.mono(this, entry.url, Theme.INFO, 12));
+                card.addView(Widgets.spacer(this, 14));
                 LinearLayout actions = Widgets.row(this);
+                actions.setLayoutParams(lp(MATCH, WRAP));
                 TextView open = button("Open", () -> {
                     if (sameServer()) MarkdownLinks.open(this, entry.url);
                 });
                 TextView edit = button("Edit", () -> edit(entry));
-                TextView remove = button("Delete", () -> confirmDelete(entry));
+                TextView remove = Widgets.dangerButton(this, "Delete");
+                remove.setOnClickListener(v -> confirmDelete(entry));
+                open.setLayoutParams(lp(0, WRAP, 1f));
+                edit.setLayoutParams(lp(0, WRAP, 1f));
+                remove.setLayoutParams(lp(0, WRAP, 1f));
+                Widgets.margins(open, 0, 0, Theme.dp(this, 8), 0);
+                Widgets.margins(edit, 0, 0, Theme.dp(this, 8), 0);
                 open.setEnabled(!busy);
                 edit.setEnabled(!busy);
                 remove.setEnabled(!busy);
@@ -208,9 +235,11 @@ public class SharedAssetsActivity extends Activity {
         form.addView(note("No ~ or environment-variable expansion. The directory need not exist yet."));
         TextView error = Widgets.text(this, "", Theme.DANGER, 12.5f, false);
         form.addView(error);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(form);
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(initial == null ? "Add shared asset root" : "Edit shared asset root")
-                .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+                .setView(scroll).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
         dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (busy || !sameServer()) return;
             String identifier = name.getText().toString().trim();
@@ -294,6 +323,13 @@ public class SharedAssetsActivity extends Activity {
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Override public void onBackPressed() {
         if (!busy) super.onBackPressed();
+    }
+
+    private TextView section(String text) {
+        TextView view = Widgets.text(this, text, Theme.ACCENT_STRONG, 12, true);
+        view.setAllCaps(true);
+        view.setLetterSpacing(0.06f);
+        return view;
     }
 
     private TextView note(String text) {
