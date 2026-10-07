@@ -923,12 +923,13 @@ public class SessionActivity extends Activity {
     /**
      * A command is not prose: sentence capitalisation turns {@code ls} into
      * {@code Ls} and the suggestion strip is noise over a path. Bash mode drops
-     * both. NO_SUGGESTIONS is only a hint — Gboard and AOSP honour it, some
-     * third-party IMEs ignore it — but losing CAP_SENTENCES is universal, and
-     * that is the flag that actually corrupts commands.
+     * both. NO_SUGGESTIONS alone is ignored by some keyboards, so also use
+     * VISIBLE_PASSWORD to request literal, uncorrected input (including on
+     * FUTO). Commands stay visible; leaving bash mode restores normal text.
      */
     private static int bashInputType() {
         return android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
                 | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
     }
