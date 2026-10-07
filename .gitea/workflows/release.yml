@@ -1,0 +1,23 @@
+name: Release APK
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    # Register this act_runner label as android-release:host.
+    runs-on: android-release
+    steps:
+      - name: Check out the pushed commit
+        uses: https://github.com/actions/checkout@v4
+        with:
+          ref: ${{ gitea.sha }}
+          persist-credentials: false
+      - name: Build and publish the committed version
+        env:
+          GITEA_SERVER_URL: ${{ gitea.server_url }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+          GITEA_SHA: ${{ gitea.sha }}
+          GITEA_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: python3 scripts/gitea-release.py

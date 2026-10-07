@@ -3,6 +3,7 @@ PODMAN ?= podman
 GRADLE_CACHE ?= android-gradle-cache
 # Shared release keystore + password for all apps; never inside a repo.
 SIGNING_DIR ?= $(HOME)/.android-signing
+PYTHON ?= python3
 
 RUN_ANDROID = $(PODMAN) run --rm --userns=keep-id \
 	-e HOME=/gradle-cache \
@@ -24,7 +25,7 @@ debug: image
 release: image
 	$(RUN_ANDROID) scripts/release.sh build
 	$(RUN_OFFLINE) \
-		-v "$(SIGNING_DIR):/signing:ro,Z" \
+		-v "$(SIGNING_DIR):/signing:ro,z" \
 		-v "$(CURDIR)/build/release/unsigned:/in:ro,Z" \
 		-v "$(CURDIR)/build/release/signed:/out:Z" \
 		$(IMAGE) bash -s < scripts/sign-apk.sh
@@ -45,23 +46,25 @@ shell: image
 install:
 	adb install -r app/build/outputs/apk/debug/app-debug.apk
 
-# Release signing and versioning; see RELEASING.md.
-.PHONY: signing-key release-init
+# Explicit version preparation is separate from release builds.
+.PHONY: signing-key bump-version test-tooling
+
+bump-version:
+	$(PYTHON) scripts/bump-version.py
+
+test-tooling:
+	$(PYTHON) -m unittest discover -s tests -v
 
 # The signing key is only ever mounted into this offline container, which gets
 # no repo, no Gradle cache and no network. Scripts are fed on stdin.
+# Shared SELinux labeling (:z) lets different apps sign with the shared key.
 RUN_OFFLINE = $(PODMAN) run --rm -i --userns=keep-id --network=none
 
 release: check-signing
 
 signing-key: image
 	mkdir -p -m 700 "$(SIGNING_DIR)"
-	$(RUN_OFFLINE) -v "$(SIGNING_DIR):/signing:Z" $(IMAGE) bash -s < scripts/signing-key.sh
-
-release-init:
-	@case "$(LAST)" in ''|*[!0-9]*) echo "usage: make release-init LAST=<last released versionCode, 0 for a new app>" >&2; exit 1;; esac
-	@test ! -e .last-version-code || { echo ".last-version-code already exists ($$(cat .last-version-code)); edit it by hand if you really mean to change it" >&2; exit 1; }
-	echo "$(LAST)" > .last-version-code
+	$(RUN_OFFLINE) -v "$(SIGNING_DIR):/signing:z" $(IMAGE) bash -s < scripts/signing-key.sh
 
 .PHONY: check-signing
 check-signing:

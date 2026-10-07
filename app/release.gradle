@@ -1,34 +1,27 @@
 // Release versioning, applied from app/build.gradle.
 //
-// `make release` passes -PreleaseVersionCode=<n>. Release builds then get
-// versionCode <n> and versionName "<defaultConfig.versionName>.<n>". Debug
-// builds are unaffected. Gradle only produces an unsigned APK: signing happens
-// afterwards in a separate offline container, so build logic never sees the
-// key. See RELEASING.md.
-
-def releaseVersionCode = findProperty('releaseVersionCode')
+// versionCode is the tracked value in defaultConfig. Release versionName is
+// "<base versionName>.<versionCode>"; the base in build.gradle is never edited.
+// Bump explicitly with scripts/bump-version.py, then commit the change.
+// Gradle only produces an unsigned APK; make release signs it offline.
 
 androidComponents {
     onVariants(selector().withBuildType('release')) { variant ->
-        if (releaseVersionCode != null) {
-            def code = releaseVersionCode as int
-            variant.outputs.each { output ->
-                output.versionCode.set(code)
-                output.versionName.set("${android.defaultConfig.versionName}.${code}".toString())
-            }
+        if (findProperty('releaseVersionCode') != null) {
+            throw new GradleException('releaseVersionCode overrides are no longer supported. ' +
+                'Set the tracked versionCode in app/build.gradle instead.')
+        }
+        def code = android.defaultConfig.versionCode
+        def base = android.defaultConfig.versionName
+        if (code == null || code < 1 || code > 2100000000) {
+            throw new GradleException('versionCode must be between 1 and 2100000000.')
+        }
+        if (!(base ==~ /[A-Za-z0-9._+-]+/)) {
+            throw new GradleException('Base versionName must use only letters, digits and . _ + -.')
+        }
+        variant.outputs.each { output ->
+            output.versionCode.set(code)
+            output.versionName.set("${base}.${code}".toString())
         }
     }
-}
-
-def checkReleaseVersion = tasks.register('checkReleaseVersion') {
-    doLast {
-        if (!(releaseVersionCode ==~ /[1-9][0-9]*/)) {
-            throw new GradleException('Release builds need -PreleaseVersionCode=<positive integer>. ' +
-                'Build releases with `make release` (see RELEASING.md).')
-        }
-    }
-}
-
-tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
-    dependsOn checkReleaseVersion
 }

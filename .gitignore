@@ -9,5 +9,4 @@ local.properties
 *.apk
 *.aab
 dist/
-.last-version-code
-.last-version-code.tmp
+__pycache__/

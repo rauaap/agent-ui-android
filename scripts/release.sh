@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Release steps that run in the normal build container via `make release`:
 #
-#   build   build the unsigned APK with the next versionCode into build/release/
-#   finish  check the signed APK's certificate, save it to dist/, and only then
-#           advance the counter
+#   build   build the unsigned APK with the tracked versionCode into build/release/
+#   finish  check the signed APK's certificate and save it to dist/
+#
+# Neither step changes versionCode or the base versionName.
 #
 # Signing happens between the two in an offline container (scripts/sign-apk.sh)
 # that never sees this repo or Gradle. See RELEASING.md.
 set -euo pipefail
 
-counter=.last-version-code
 cert_file=release-cert.sha256
 out_dir=dist
 stage=build/release
@@ -18,16 +18,9 @@ die() { echo "release: $*" >&2; exit 1; }
 apksigner() { "$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)/apksigner" "$@"; }
 
 build() {
-    [[ -f $counter ]] ||
-        die "no $counter; initialize it with \`make release-init LAST=<last released versionCode, 0 for a new app>\`"
-    local last code
-    last=$(tr -d '[:space:]' < "$counter")
-    [[ $last =~ ^(0|[1-9][0-9]*)$ ]] || die "$counter does not contain a non-negative integer: '$last'"
-    code=$((last + 1))
-
     rm -rf "$stage"
-    echo "release: building versionCode $code"
-    gradle --no-daemon assembleRelease -PreleaseVersionCode="$code"
+    echo "release: building the tracked version in app/build.gradle"
+    gradle --no-daemon assembleRelease
 
     local apk_dir=app/build/outputs/apk/release
     local meta=$apk_dir/output-metadata.json
@@ -37,13 +30,15 @@ build() {
     built_code=$(json_field versionCode)
     name=$(json_field versionName)
 
-    [[ $built_code == "$code" ]] || die "built versionCode '$built_code', expected $code"
+    [[ $built_code =~ ^[1-9][0-9]*$ && ${#built_code} -le 10 ]] || die "invalid built versionCode '$built_code'"
+    (( built_code <= 2100000000 )) || die "built versionCode exceeds Android's limit"
+    [[ $app_id =~ ^[A-Za-z][A-Za-z0-9_.]*$ ]] || die "invalid applicationId '$app_id'"
     [[ $name =~ ^[A-Za-z0-9._+-]+$ ]] ||
         die "versionName '$name' is not filename-safe; use only letters, digits and . _ + -"
 
     mkdir -p "$stage/unsigned" "$stage/signed"
     cp "$apk_dir/app-release-unsigned.apk" "$stage/unsigned/app.apk"
-    printf '%s\n' "$app_id" "$name" "$code" > "$stage/info"
+    printf '%s\n' "$app_id" "$name" "$built_code" > "$stage/info"
 }
 
 finish() {
@@ -70,13 +65,11 @@ The signing directory holds a different key than earlier releases; restore the r
     fi
 
     local out=$out_dir/$app_id-$name.apk
-    [[ ! -e $out ]] || die "$out already exists; refusing to overwrite"
+    # Local rebuilds may replace the same version; published releases are
+    # immutable and protected separately by the Gitea publishing helper.
     mkdir -p "$out_dir"
     cp "$apk" "$out.tmp"
     mv "$out.tmp" "$out"
-
-    echo "$code" > "$counter.tmp"
-    mv "$counter.tmp" "$counter"
 
     echo "release: $out (versionName $name, versionCode $code, certificate $cert)"
 }

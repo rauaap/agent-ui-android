@@ -5,8 +5,9 @@ A native Android client for controlling Claude Code agents. It talks to the
 sessions and a WebSocket per session for the live transcript.
 
 The build is fully containerized and CLI-driven — no JDK, Android SDK, or Gradle
-needed on the host. The only host dependency is `podman` (and `adb`, if you want
-to install on a device).
+needed on the host. Host build dependencies are `make` and `podman` (and `adb`
+for device installation). The version-bump helper and tooling tests also need
+Python 3.
 
 ## Server authentication
 
@@ -218,7 +219,8 @@ Device smoke checks before release:
 Containerfile          Fedora + JDK 25 + Android SDK + Gradle toolchain
 Makefile               build / shell / install targets (podman wrapper)
 RELEASING.md           signing, versioning, and release workflow
-scripts/               release and signing-key helpers (run in the container)
+.gitea/workflows/      release and GitHub mirror workflows
+scripts/               version bump, release, signing, and publishing helpers
 build.gradle           root project — pins the Android Gradle Plugin version
 settings.gradle        project name + module list
 app/                   the application module
@@ -278,7 +280,10 @@ Output: `app/build/outputs/apk/debug/app-debug.apk`
 Other targets:
 
 ```sh
-make release            # signed, auto-versioned APK in dist/ (see RELEASING.md)
+make bump-version       # increment tracked versionCode before committing
+make release            # signed APK for that version in dist/ (no bump)
+make test               # app unit tests in the build container
+make test-tooling       # tooling tests (Python 3; no container needed)
 make clean              # gradle clean
 make gradle ARGS="tasks"   # run any gradle task in the container
 make shell              # interactive shell inside the build container
@@ -286,6 +291,18 @@ make shell              # interactive shell inside the build container
 
 The Gradle cache is persisted in a named volume (`android-gradle-cache`) so
 incremental builds and the debug keystore survive between runs.
+
+## Releases and Gitea Actions
+
+Run `make bump-version`, then `make release` to verify the build. Commit the
+bumped `versionCode` with your changes and push to `main`. Release names are
+derived as `<base versionName>.<versionCode>`; builds never change the version.
+Local rebuilds replace their APK in `dist/`, but CI never overwrites a published
+release. Superseded pushes are skipped.
+
+See [RELEASING.md](RELEASING.md) for signing, migration from the old local
+counter, and Gitea setup (host runner, signing key, certificate fingerprint,
+and the `RELEASE_TOKEN` Actions secret).
 
 ## Install on a device
 
