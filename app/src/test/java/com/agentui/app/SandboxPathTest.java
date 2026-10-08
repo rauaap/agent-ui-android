@@ -12,16 +12,16 @@ import static org.junit.Assert.*;
 
 public class SandboxPathTest {
     @Test public void absentProjectPathsAreEmptyButNotAdvertisedAsSupported() throws Exception {
-        Project old = Project.from(new JSONObject("{\"path\":\"/project\"}"));
+        Project old = Project.from(new JSONObject("{\"path\":\"/project\",\"sandbox_network_allowlist\":[]}"));
         assertTrue(old.sandboxPaths.isEmpty());
         assertFalse(old.hasSandboxPaths);
-        Project current = Project.from(new JSONObject("{\"sandbox_paths\":[]}"));
+        Project current = Project.from(new JSONObject("{\"sandbox_paths\":[],\"sandbox_network_allowlist\":[]}"));
         assertTrue(current.sandboxPaths.isEmpty());
         assertTrue(current.hasSandboxPaths);
     }
 
     @Test public void projectReadPreservesPathsAndDefaultsWriteToFalse() throws Exception {
-        Project project = Project.from(new JSONObject("{\"sandbox_paths\":["
+        Project project = Project.from(new JSONObject("{\"sandbox_network_allowlist\":[],\"sandbox_paths\":["
                 + "{\"path\":\"~/.config/tool\"},"
                 + "{\"path\":\"$HOME/data with spaces\",\"write\":true}]}"));
         assertEquals("~/.config/tool", project.sandboxPaths.get(0).path);

@@ -150,10 +150,11 @@ final class Api {
                 new JSONObject(body).getJSONArray("sandbox_network_allowlist")));
     }
 
-    /** Atomic server-wide replacement; the response is the normalized saved list. */
-    void saveSandboxNetwork(List<SandboxNetworkDestination> entries, Cb<List<SandboxNetworkDestination>> cb) {
-        Request req = new Request.Builder().url(prefs.httpBase() + "/sandbox-network")
-                .patch(RequestBody.create(SandboxNetworkDestination.replacement(entries).toString(), JSON))
+    /** Atomic scope replacement; the response is the normalized own list, not the union. */
+    void saveSandboxNetwork(String projectPath, List<SandboxNetworkDestination> entries,
+                            Cb<List<SandboxNetworkDestination>> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + (projectPath == null ? "/sandbox-network" : "/projects"))
+                .patch(RequestBody.create(SandboxNetworkDestination.replacement(projectPath, entries).toString(), JSON))
                 .build();
         enqueue(req, cb, body -> SandboxNetworkDestination.from(
                 new JSONObject(body).getJSONArray("sandbox_network_allowlist")));
@@ -195,10 +196,15 @@ final class Api {
 
     /** Creates the project row and its directory; harmless if both exist. */
     void createProject(String path, String name, Cb<Project> cb) {
+        createProject(path, name, null, cb);
+    }
+
+    void createProject(String path, String name, List<SandboxNetworkDestination> entries, Cb<Project> cb) {
         JSONObject payload = new JSONObject();
         try {
             payload.put("path", path);
             payload.put("name", name);
+            if (entries != null) payload.put("sandbox_network_allowlist", SandboxNetworkDestination.toJson(entries));
         } catch (Exception ignored) {}
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/projects")

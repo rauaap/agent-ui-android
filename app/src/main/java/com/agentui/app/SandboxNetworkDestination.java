@@ -39,10 +39,17 @@ final class SandboxNetworkDestination {
         return array;
     }
 
-    /** Required array, including when clearing the entire server-wide list. */
+    /** Required array, including when clearing the entire scope's list. */
     static JSONObject replacement(List<SandboxNetworkDestination> entries) {
         JSONObject payload = new JSONObject();
         try { payload.put("sandbox_network_allowlist", toJson(entries)); }
+        catch (JSONException e) { throw new IllegalArgumentException(e); }
+        return payload;
+    }
+
+    static JSONObject replacement(String projectPath, List<SandboxNetworkDestination> entries) {
+        JSONObject payload = replacement(entries);
+        try { if (projectPath != null) payload.put("path", projectPath); }
         catch (JSONException e) { throw new IllegalArgumentException(e); }
         return payload;
     }

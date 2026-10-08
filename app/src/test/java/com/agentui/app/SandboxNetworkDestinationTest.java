@@ -39,6 +39,30 @@ public class SandboxNetworkDestinationTest {
         assertEquals(1, saved.size());
     }
 
+    @Test public void projectResponseContainsOnlyOwnEntries() throws Exception {
+        Project project = Project.from(new JSONObject("{\"path\":\"/project\","
+                + "\"sandbox_network_allowlist\":[{\"ip\":\"100.64.0.10\",\"port\":22}]}"));
+        assertEquals(1, project.sandboxNetworkAllowlist.size());
+        assertEquals(22, project.sandboxNetworkAllowlist.get(0).port);
+        assertEquals("100.64.0.10", project.sandboxNetworkAllowlist.get(0).ip);
+        Project cleared = Project.from(new JSONObject("{\"sandbox_network_allowlist\":[]}"));
+        assertTrue(cleared.sandboxNetworkAllowlist.isEmpty());
+    }
+
+    @Test public void projectReplacementTouchesOnlyOwnScope() throws Exception {
+        List<SandboxNetworkDestination> entries = Arrays.asList(new SandboxNetworkDestination("100.64.0.10", 22));
+        JSONObject payload = SandboxNetworkDestination.replacement("/project with spaces", entries);
+        assertEquals(2, payload.length());
+        assertEquals("/project with spaces", payload.getString("path"));
+        assertEquals(22, payload.getJSONArray("sandbox_network_allowlist").getJSONObject(0).getInt("port"));
+        assertFalse(payload.has("sandbox_paths"));
+        assertFalse(payload.has("archived"));
+        JSONObject clear = SandboxNetworkDestination.replacement("/project", new ArrayList<>());
+        assertEquals("[]", clear.getJSONArray("sandbox_network_allowlist").toString());
+        assertEquals(1, SandboxNetworkDestination.replacement(null, entries).length());
+        assertEquals(1, entries.size());
+    }
+
     @Test public void ipv4SyntaxNeverResolvesHostnames() {
         assertTrue(SandboxNetworkDestination.isIpv4Literal("100.64.0.10"));
         assertTrue(SandboxNetworkDestination.isIpv4Literal("192.168.1.1"));

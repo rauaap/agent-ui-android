@@ -189,16 +189,26 @@ Device smoke checks before release:
   can expose credentials; writable paths permit changes or deletion of host data.
 
 - **Sandbox network** — open **Settings ▸ Server sandbox network** beside sandbox
-  paths. Load, add/edit/remove exact IPv4 + TCP port pairs, then **Save exceptions**
-  to replace the server-wide list via `GET/PATCH /sandbox-network` with
+  paths, or **Project settings ▸ Project sandbox network** for project additions.
+  Both scopes reuse the sandbox settings editor layout, navigation, card actions,
+  explicit save, reset confirmation, and unsaved-change discard behavior.
+  Load, add/edit/remove exact IPv4 + TCP port pairs, then **Save exceptions**.
+  The server-wide list uses `GET/PATCH /sandbox-network` with
   `{"sandbox_network_allowlist": [{"ip": "100.64.0.10", "port": 443}]}`.
+  Project own lists come from `GET /projects`; `PATCH /projects` replaces them
+  with `path` and `sandbox_network_allowlist`. Creation accepts an optional list;
+  omitted lists on create default to `[]`, and omission on update preserves them.
   Clearing and saving sends `[]`. The normalized response becomes the saved list;
   API errors retain the draft. Ports must be integers 1–65535; the server enforces
   unicast IPv4 policy (no hostnames, CIDRs, IPv6, loopback, unspecified, reserved,
   multicast, or sandbox DNS proxy address). Only the specified TCP port is exposed,
   even if Gitea and agent-ui-server share an IP; other ports and UDP stay blocked.
-  Changes affect new sandboxed turns for both agents, not running turns. There are
-  no project/session overrides; an empty list means no private-network exceptions.
+  Changes affect the next sandboxed turn for both agents, including worktree
+  sessions, not running turns. Effective exceptions are the union of server and
+  project IP/port pairs. Inherited server entries are read-only in the project
+  editor and cannot be removed there. An empty project list means server
+  inheritance only; an empty server list does not remove project exceptions.
+  There is no per-session list.
 
 - **Shared assets** — open **Settings ▸ Server shared assets** for global roots,
   or **Project settings ▸ Project shared assets** for project-associated roots.
@@ -239,7 +249,7 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `ProjectSettingsActivity.java` | per-project settings: sandbox paths, shared assets, archive / unarchive |
 | `SettingsActivity.java`    | server address + projects directory form (persisted) + the way in to Archived |
 | `SandboxPathsActivity.java` | shared server/project sandbox-path editor with inheritance and atomic saves |
-| `SandboxNetworkActivity.java` | server-wide IPv4 + TCP port editor with atomic saves |
+| `SandboxNetworkActivity.java` | shared server/project IPv4 + TCP port editor, read-only inheritance and atomic saves |
 | `SharedAssetsActivity.java` | global/project shared-asset root CRUD, rename and browser Open |
 | `SharedAssetRoot.java` | shared-asset registrations, scope filtering and request payloads |
 | `MarkdownLinks.java` | selectable chat link tap handling and shared-asset URL resolution |

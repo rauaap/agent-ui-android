@@ -106,6 +106,12 @@ public class ProjectSettingsActivity extends Activity {
                 .putExtra(SandboxPathsActivity.EXTRA_PROJECT_PATH, projectDir)));
         form.addView(sandboxPaths);
         form.addView(spacer(12));
+        TextView sandboxNetwork = Widgets.ghostButton(this, "Project sandbox network ›");
+        sandboxNetwork.setEnabled(projectDir != null);
+        sandboxNetwork.setOnClickListener(v -> startActivity(new Intent(this, SandboxNetworkActivity.class)
+                .putExtra(SandboxNetworkActivity.EXTRA_PROJECT_PATH, projectDir)));
+        form.addView(sandboxNetwork);
+        form.addView(spacer(12));
         TextView sharedAssets = Widgets.ghostButton(this, "Project shared assets ›");
         sharedAssets.setEnabled(projectDir != null);
         sharedAssets.setOnClickListener(v -> startActivity(new Intent(this, SharedAssetsActivity.class)
