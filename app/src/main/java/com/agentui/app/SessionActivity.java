@@ -62,6 +62,7 @@ public class SessionActivity extends Activity {
     static final String EXTRA_ARCHIVED = "archived";
 
     private static final int REQ_SETTINGS = 2;
+    private static final int REQ_IMAGE = 3;
 
     /**
      * Open {@code s}. A null {@code projectDir} is fine: the screen looks the
@@ -120,10 +121,24 @@ public class SessionActivity extends Activity {
     private TextView activity;
     private EditText input;
     private TextView sendBtn;
-    private LinearLayout composerBox; // the bordered frame around input + send
+    private LinearLayout composerBox; // bordered composer field, including previews
+    private LinearLayout composerRow; // field plus separate send control
     private boolean bashMode;         // the composer is showing command styling
     private final MessageHistory messageHistory = new MessageHistory();
     private SessionDraft composerDraft;
+    private String imageServer;
+    private String sessionModel;
+    private ImageView attachBtn;
+    private LinearLayout attachmentPanel;
+    private final List<ComposerImage> composerImages = new ArrayList<>();
+    private android.app.Dialog imageDialog;
+
+    private static final class ComposerImage {
+        ImageAttachment image;
+        android.graphics.Bitmap preview;
+        SelectedImageFile original;
+        String state = "Uploading…";
+    }
     // Successful sends enter history before the server echoes them. Keep their
     // composer forms here so those echoes do not add duplicates.
     private final ArrayDeque<String> pendingHistoryEchoes = new ArrayDeque<>();
@@ -223,10 +238,18 @@ public class SessionActivity extends Activity {
         archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         notifyOn = api.prefs().notifyEnabled(sessionId);
 
+        imageServer = api.prefs().httpBase();
         composerDraft = api.prefs().sessionDraft(sessionId);
+        for (ImageAttachment image : composerDraft.restoreImages()) {
+            ComposerImage item = new ComposerImage();
+            item.image = image;
+            item.state = "";
+            composerImages.add(item);
+        }
         setContentView(buildRoot(sessionName));
         input.setText(composerDraft.restore());
         input.setSelection(input.length());
+        renderComposerImages();
         applyArchived(archived);
         applyStatus(status);
         connect();
@@ -241,6 +264,7 @@ public class SessionActivity extends Activity {
                 agents.clear();
                 agents.addAll(list);
                 updateAgentLabels();
+                updateImageCapability();
             }
 
             // The raw id stays as the label.
@@ -275,7 +299,9 @@ public class SessionActivity extends Activity {
                     sessionName = session.name;
                     nameView.setText(session.name);
                     sessionAgent = session.agent;
+                    sessionModel = session.model;
                     updateAgentLabels();
+                    updateImageCapability();
                     projectId = session.projectId;
                     workingDir = session.workingDir;
                     worktreeId = session.worktreeId;
@@ -328,6 +354,7 @@ public class SessionActivity extends Activity {
     private void saveComposerDraft() {
         if (composerDraft != null && input != null) {
             composerDraft.save(input.getText().toString());
+            composerDraft.saveImages(successfulComposerImages());
         }
     }
 
@@ -352,6 +379,8 @@ public class SessionActivity extends Activity {
     protected void onDestroy() {
         saveComposerDraft();
         active = false;
+        if (imageDialog != null) imageDialog.dismiss();
+        for (ComposerImage item : composerImages) releaseSelectedImage(item);
         Auth.forget(resumeAuth);
         SessionState.get(api, sessionId).connection(false);
         cancelReconnect();
@@ -506,14 +535,13 @@ public class SessionActivity extends Activity {
         footer.addView(activity);
 
         LinearLayout composer = Widgets.row(this);
-        composerBox = composer;
-        // Every control has a 44dp minimum/touch target. Keep them centred as
-        // the multiline input grows instead of moving fixed buttons with the
-        // EditText font's changing baseline.
-        composer.setGravity(Gravity.CENTER_VERTICAL);
-        composer.setBackground(Theme.rounded(this, Theme.PANEL, 18, Theme.LINE, 1));
-        int cp = Theme.dp(this, 8);
-        composer.setPadding(cp, cp, cp, cp);
+        composerRow = composer;
+        composer.setGravity(Gravity.BOTTOM);
+        composerBox = Widgets.column(this);
+        composerBox.setBackground(Theme.rounded(this, Theme.PANEL, 18, Theme.LINE, 1));
+        attachmentPanel = Widgets.column(this);
+        composerBox.addView(attachmentPanel);
+        FrameLayout composerInput = new FrameLayout(this);
 
         input = new EditText(this);
         input.setHint("Message the agent…");
@@ -606,8 +634,25 @@ public class SessionActivity extends Activity {
             if (actionId == EditorInfo.IME_ACTION_SEND) { sendPrompt(); return true; }
             return false;
         });
-        input.setLayoutParams(lp(0, WRAP, 1f));
-        composer.addView(input);
+        composerInput.addView(input, new FrameLayout.LayoutParams(MATCH, WRAP));
+
+        attachBtn = new ImageView(this);
+        attachBtn.setImageResource(R.drawable.ic_paperclip);
+        attachBtn.setImageTintList(android.content.res.ColorStateList.valueOf(Theme.INK));
+        attachBtn.setScaleType(ImageView.ScaleType.CENTER);
+        attachBtn.setBackground(Theme.rounded(this, Theme.PANEL2, ImagePreviewStyle.CORNER, Theme.LINE, 1));
+        attachBtn.setContentDescription("Attach image");
+        FrameLayout.LayoutParams attachLp = new FrameLayout.LayoutParams(
+                Theme.dp(this, ImagePreviewStyle.ATTACH_SIZE), Theme.dp(this, ImagePreviewStyle.ATTACH_SIZE),
+                Gravity.END | Gravity.BOTTOM);
+        attachLp.rightMargin = Theme.dp(this, ImagePreviewStyle.ATTACH_INSET);
+        attachLp.bottomMargin = Theme.dp(this, ImagePreviewStyle.ATTACH_INSET);
+        attachBtn.setOnClickListener(v -> pickImage());
+        attachBtn.setVisibility(View.GONE);
+        composerInput.addView(attachBtn, attachLp);
+        expandImageTouchTarget(composerInput, attachBtn);
+        composerBox.addView(composerInput, lp(MATCH, WRAP));
+        composer.addView(composerBox, lp(0, WRAP, 1f));
 
         sendBtn = Widgets.primaryButton(this, "↑");
         sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
@@ -868,7 +913,7 @@ public class SessionActivity extends Activity {
         if (composerHolder == null) return;
         composerHolder.removeAllViews();
         if (!archived) {
-            composerHolder.addView(composerBox);
+            composerHolder.addView(composerRow);
             return;
         }
 
@@ -964,6 +1009,7 @@ public class SessionActivity extends Activity {
      */
     private void applyComposerMode() {
         boolean bash = Composer.isBash(input.getText().toString());
+        updateImageCapability();
         if (bash == bashMode) return;
         bashMode = bash;
 
@@ -1219,6 +1265,11 @@ public class SessionActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_IMAGE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                selectImage(data.getData());
+            return;
+        }
         if (requestCode != REQ_SETTINGS) return;
         // Archived from settings: the session is no longer on the list this
         // screen was opened from, so close it and follow it back there. Staying
@@ -1551,7 +1602,7 @@ public class SessionActivity extends Activity {
             return;
         }
         agentBubble = null;
-        addInputMessage(prompt, source);
+        addInputMessage(prompt, source, ImageAttachment.parse(msg.optJSONArray("images")));
     }
 
     /** A batch handed to a turn: one transcript row per message, in order. */
@@ -1566,13 +1617,13 @@ public class SessionActivity extends Activity {
         }
         // The turn's output starts after these rows, in a bubble of its own.
         agentBubble = null;
-        for (MessageQueue.Message m : rows) addInputMessage(m.text, m.source);
+        for (MessageQueue.Message m : rows) addInputMessage(m.text, m.source, m.images);
         renderPending();
     }
 
-    private void addInputMessage(String text, InterAgent.Source source) {
-        if (source.isUser()) addUserMessage(text);
-        else addAgentMessage(text, source);
+    private void addInputMessage(String text, InterAgent.Source source, List<ImageAttachment> images) {
+        if (source.isUser()) addUserMessage(text, images);
+        else addAgentMessage(text, source, images);
     }
 
     /**
@@ -1617,6 +1668,7 @@ public class SessionActivity extends Activity {
         body.setEllipsize(android.text.TextUtils.TruncateAt.END);
         Widgets.margins(body, 0, Theme.dp(this, 3), 0, 0);
         row.addView(body);
+        addImages(row, m.images);
         return row;
     }
 
@@ -1657,16 +1709,20 @@ public class SessionActivity extends Activity {
         scrollDownBtn.setVisibility(scroll.canScrollVertically(1) ? View.VISIBLE : View.GONE);
     }
 
-    private void addUserMessage(String text) {
+    private void addUserMessage(String text, List<ImageAttachment> images) {
         LinearLayout wrap = Widgets.column(this);
         wrap.setGravity(Gravity.END);
-        TextView bubble = Widgets.text(this, text, Theme.INK, 15, false);
-        bubble.setTextIsSelectable(true);
+        LinearLayout bubble = Widgets.column(this);
         bubble.setBackground(Theme.rounded(this, Theme.ACCENT_SOFT, 16, Theme.ACCENT_LINE, 1));
         int p = Theme.dp(this, 12);
         bubble.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
-        bubble.setLayoutParams(lp(WRAP, WRAP));
-        wrap.addView(bubble);
+        if (!text.isEmpty()) {
+            TextView body = Widgets.text(this, text, Theme.INK, 15, false);
+            body.setTextIsSelectable(true);
+            bubble.addView(body, lp(WRAP, WRAP));
+        }
+        addImages(bubble, images);
+        wrap.addView(bubble, lp(WRAP, WRAP));
         append(wrap);
     }
 
@@ -1675,7 +1731,7 @@ public class SessionActivity extends Activity {
      * user's bubble is orange, and headed by who sent it. Plain text like the
      * user bubble — it is input, not this agent's Markdown output.
      */
-    private void addAgentMessage(String text, InterAgent.Source source) {
+    private void addAgentMessage(String text, InterAgent.Source source, List<ImageAttachment> images) {
         LinearLayout content = Widgets.column(this);
 
         LinearLayout head = Widgets.row(this);
@@ -1698,6 +1754,7 @@ public class SessionActivity extends Activity {
         body.setTextIsSelectable(true);
         Widgets.margins(body, 0, Theme.dp(this, 6), 0, 0);
         content.addView(body);
+        addImages(content, images);
 
         // Names are looked up on every draw, so a rename or archive shows.
         Runnable render = () -> renderSender(sender, source);
@@ -2780,6 +2837,218 @@ public class SessionActivity extends Activity {
     }
 
     /* ---------------------------------------------------------------- */
+    /* images                                                           */
+    /* ---------------------------------------------------------------- */
+
+    private boolean imageCapable() {
+        Agent agent = Agent.find(agents, sessionAgent);
+        Model model = agent == null ? null : agent.model(sessionModel);
+        return model != null && model.supportsImages();
+    }
+
+    private void updateImageCapability() {
+        if (attachBtn == null) return;
+        boolean visible = imageCapable() && !Composer.isBash(input.getText().toString());
+        attachBtn.setVisibility(visible ? View.VISIBLE : View.GONE);
+        // Reserve input text space for the inside-right paperclip, not for an external button.
+        int right = visible ? ImagePreviewStyle.ATTACH_SIZE + ImagePreviewStyle.ATTACH_INSET * 2 : 8;
+        input.setPadding(Theme.dp(this, 8), Theme.dp(this, 8), Theme.dp(this, right), Theme.dp(this, 8));
+    }
+
+    private void imageNotice(String message) {
+        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show();
+    }
+
+    private void pickImage() {
+        if (archived || !imageCapable() || Composer.isBash(input.getText().toString())) return;
+        if (composerImages.size() >= ImageAttachment.MAX_COUNT) {
+            imageNotice("At most 10 images per message");
+            return;
+        }
+        Intent picker = new Intent(Intent.ACTION_GET_CONTENT).setType("image/*")
+                .addCategory(Intent.CATEGORY_OPENABLE);
+        picker.putExtra(Intent.EXTRA_MIME_TYPES,
+                new String[]{"image/jpeg", "image/png", "image/gif", "image/webp"});
+        startActivityForResult(picker, REQ_IMAGE);
+    }
+
+    private void selectImage(android.net.Uri uri) {
+        if (archived || !imageCapable() || composerImages.size() >= ImageAttachment.MAX_COUNT) return;
+        ComposerImage item = new ComposerImage();
+        composerImages.add(item);
+        renderComposerImages();
+        Images.upload(this, api, imageServer, uri, new Api.Cb<Images.Selection>() {
+            @Override public void onResult(Images.Selection selected) {
+                if (!active || !composerImages.contains(item)) {
+                    Images.release(selected.original);
+                    return;
+                }
+                item.preview = selected.preview;
+                item.original = selected.original;
+                renderComposerImages();
+            }
+            @Override public void onError(String message) {}
+        }, new Api.Cb<ImageAttachment>() {
+            @Override public void onResult(ImageAttachment image) {
+                if (!active || !composerImages.contains(item)) return;
+                item.image = image;
+                item.preview = null;
+                item.state = "";
+                saveComposerDraft();
+                renderComposerImages();
+            }
+            @Override public void onError(String message) {
+                if (!active || !composerImages.contains(item)) return;
+                item.state = "Failed: " + message;
+                renderComposerImages();
+            }
+        });
+    }
+
+    private void releaseSelectedImage(ComposerImage item) {
+        Images.release(item.original);
+        item.original = null;
+    }
+
+    private void openImageViewer(ImageAttachment image, SelectedImageFile original) {
+        if (!active || isFinishing()) return;
+        if (imageDialog != null) imageDialog.dismiss();
+        hideKeyboard();
+        imageDialog = ImageViewer.show(this, api, imageServer, image, original);
+    }
+
+    private List<ImageAttachment> successfulComposerImages() {
+        List<ImageAttachment> images = new ArrayList<>();
+        for (ComposerImage item : composerImages) if (item.image != null) images.add(item.image);
+        return images;
+    }
+
+    private void renderComposerImages() {
+        attachmentPanel.removeAllViews();
+        attachmentPanel.setPadding(0, 0, 0, 0);
+        if (composerImages.isEmpty()) return;
+        attachmentPanel.setPadding(Theme.dp(this, 12), Theme.dp(this, 10), Theme.dp(this, 12), 0);
+        HorizontalScrollView scroller = new HorizontalScrollView(this);
+        LinearLayout row = Widgets.row(this);
+        for (ComposerImage item : composerImages) {
+            LinearLayout tile = Widgets.column(this);
+            FrameLayout previewBox = new FrameLayout(this);
+            if (item.image != null) previewBox.addView(imageView(item.image, item.original));
+            else {
+                ImageThumbnail preview = new ImageThumbnail(this);
+                preview.setContentDescription("Open selected image");
+                preview.setBitmap(item.preview);
+                if (item.original != null) {
+                    preview.setFocusable(true);
+                    preview.setOnClickListener(v -> openImageViewer(null, item.original));
+                }
+                previewBox.addView(preview, new FrameLayout.LayoutParams(MATCH, MATCH));
+            }
+            TextView remove = Widgets.text(this, "×", Theme.INK, 18, false);
+            remove.setGravity(Gravity.CENTER);
+            remove.setContentDescription("Remove image");
+            remove.setBackground(Theme.rounded(this, Theme.PANEL2, ImagePreviewStyle.REMOVE_SIZE / 2, Theme.LINE, 1));
+            FrameLayout.LayoutParams removeLp = new FrameLayout.LayoutParams(
+                    Theme.dp(this, ImagePreviewStyle.REMOVE_SIZE), Theme.dp(this, ImagePreviewStyle.REMOVE_SIZE),
+                    Gravity.TOP | Gravity.END);
+            removeLp.topMargin = Theme.dp(this, 2);
+            removeLp.rightMargin = Theme.dp(this, 2);
+            remove.setOnClickListener(v -> {
+                releaseSelectedImage(item);
+                composerImages.remove(item);
+                saveComposerDraft();
+                renderComposerImages();
+            });
+            previewBox.addView(remove, removeLp);
+            expandImageTouchTarget(previewBox, remove);
+            tile.addView(previewBox, lp(Theme.dp(this, ImagePreviewStyle.WIDTH), Theme.dp(this, ImagePreviewStyle.HEIGHT)));
+            if (item.image == null) {
+                TextView state = Widgets.text(this, item.state, Theme.MUTED, 11, false);
+                tile.addView(state);
+            }
+            LinearLayout.LayoutParams tileLp = lp(Theme.dp(this, ImagePreviewStyle.WIDTH), WRAP);
+            tileLp.rightMargin = Theme.dp(this, 8);
+            row.addView(tile, tileLp);
+        }
+        scroller.addView(row);
+        attachmentPanel.addView(scroller);
+    }
+
+    /** Keep compact desktop-sized icons while providing native 44dp touch targets. */
+    private void expandImageTouchTarget(View parent, View control) {
+        parent.addOnLayoutChangeListener((v, l, t, r, b, oldL, oldT, oldR, oldB) -> {
+            android.graphics.Rect bounds = new android.graphics.Rect();
+            control.getHitRect(bounds);
+            int extraX = Math.max(0, (Theme.dp(this, 44) - bounds.width()) / 2);
+            int extraY = Math.max(0, (Theme.dp(this, 44) - bounds.height()) / 2);
+            bounds.inset(-extraX, -extraY);
+            if (bounds.left < 0) bounds.offset(-bounds.left, 0);
+            if (bounds.top < 0) bounds.offset(0, -bounds.top);
+            // Do not shift the remove target left over the thumbnail's center (now its open action).
+            if (control == attachBtn && bounds.right > parent.getWidth())
+                bounds.offset(parent.getWidth() - bounds.right, 0);
+            if (bounds.bottom > parent.getHeight()) bounds.offset(0, parent.getHeight() - bounds.bottom);
+            parent.setTouchDelegate(new android.view.TouchDelegate(bounds, control));
+        });
+    }
+
+    private boolean relevantImageView(View view) {
+        if (!active) return false;
+        for (android.view.ViewParent parent = view.getParent(); parent != null; parent = parent.getParent()) {
+            if (parent == transcript || parent == replayBuffer || parent == pendingList
+                    || parent == attachmentPanel) return true;
+        }
+        return false;
+    }
+
+    private View imageView(ImageAttachment image) {
+        return imageView(image, null);
+    }
+
+    private View imageView(ImageAttachment image, SelectedImageFile original) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setContentDescription("Open image");
+        frame.setFocusable(true);
+        frame.setOnClickListener(v -> openImageViewer(image, original));
+        frame.setLayoutParams(lp(Theme.dp(this, ImagePreviewStyle.WIDTH), Theme.dp(this, ImagePreviewStyle.HEIGHT)));
+        TextView placeholder = Widgets.text(this, "Loading image…", Theme.MUTED, 12, false);
+        placeholder.setGravity(Gravity.CENTER);
+        frame.addView(placeholder, new FrameLayout.LayoutParams(MATCH, MATCH));
+        ImageThumbnail bitmapView = new ImageThumbnail(this);
+        bitmapView.setContentDescription("Attached image " + image.width + " × " + image.height);
+        frame.addView(bitmapView, new FrameLayout.LayoutParams(MATCH, MATCH));
+        Api.Cb<android.graphics.Bitmap> loaded = new Api.Cb<android.graphics.Bitmap>() {
+            @Override public void onResult(android.graphics.Bitmap bitmap) {
+                if (!relevantImageView(frame)) return;
+                bitmapView.setBitmap(bitmap);
+                placeholder.setVisibility(View.GONE);
+            }
+            @Override public void onError(String message) {
+                if (relevantImageView(frame)) placeholder.setText(message);
+            }
+        };
+        int target = Theme.dp(this, ImagePreviewStyle.WIDTH);
+        if (original != null) Images.loadSelected(api, imageServer, original, target, loaded);
+        else Images.load(this, api, imageServer, image, target, loaded);
+        return frame;
+    }
+
+    private void addImages(LinearLayout parent, List<ImageAttachment> images) {
+        if (images.isEmpty()) return;
+        HorizontalScrollView scroller = new HorizontalScrollView(this);
+        LinearLayout row = Widgets.row(this);
+        for (ImageAttachment image : images) {
+            LinearLayout.LayoutParams previewLp = lp(Theme.dp(this, ImagePreviewStyle.WIDTH), Theme.dp(this, ImagePreviewStyle.HEIGHT));
+            previewLp.rightMargin = Theme.dp(this, ImagePreviewStyle.GAP);
+            row.addView(imageView(image), previewLp);
+        }
+        scroller.addView(row);
+        LinearLayout.LayoutParams stripLp = lp(WRAP, Theme.dp(this, ImagePreviewStyle.HEIGHT));
+        stripLp.topMargin = Theme.dp(this, 8);
+        parent.addView(scroller, stripLp);
+    }
+
+    /* ---------------------------------------------------------------- */
     /* sending                                                          */
     /* ---------------------------------------------------------------- */
 
@@ -2787,8 +3056,19 @@ public class SessionActivity extends Activity {
         // The composer is off screen while archived, but the IME's send action
         // can still reach here from a detached-but-focused input.
         if (archived) return;
-        Composer parsed = Composer.parse(input.getText().toString());
+        Composer parsed = Composer.parse(input.getText().toString(), !composerImages.isEmpty());
         if (parsed == null || socket == null) return;
+        List<ImageAttachment> images = successfulComposerImages();
+        if (!composerImages.isEmpty()) {
+            if (parsed.bash || !imageCapable()) {
+                imageNotice("Images require an image-capable model and prompt mode");
+                return;
+            }
+            if (images.size() != composerImages.size()) {
+                imageNotice("Wait for uploads, or remove failed images before sending");
+                return;
+            }
+        }
         try {
             JSONObject out = new JSONObject();
             if (parsed.bash) {
@@ -2808,6 +3088,7 @@ public class SessionActivity extends Activity {
                 // for the next turn and echoes it into the pending list.
                 out.put("type", "input");
                 out.put("text", parsed.text);
+                if (!images.isEmpty()) out.put("images", ImageAttachment.ids(images));
             }
             if (socket.send(out.toString())) {
                 String historyEntry = parsed.bash
@@ -2816,7 +3097,11 @@ public class SessionActivity extends Activity {
                 messageHistory.add(historyEntry);
                 pendingHistoryEchoes.addLast(historyEntry);
                 input.setText("");
+                for (ComposerImage item : composerImages) releaseSelectedImage(item);
+                composerImages.clear();
                 composerDraft.save("");
+                composerDraft.saveImages(new ArrayList<>());
+                renderComposerImages();
                 applyComposerMode();
             }
         } catch (Exception ignored) {}

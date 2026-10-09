@@ -32,19 +32,27 @@ final class Model {
     final String name;
     /** What {@code reasoning_level} may be set to; empty when there is no choice. */
     final List<String> reasoningLevels;
+    /** Catalog-supported input types; an unknown capability is never image-enabled. */
+    final List<String> input;
 
-    Model(String id, String name, List<String> reasoningLevels) {
+    boolean supportsImages() { return input.contains("image"); }
+
+    Model(String id, String name, List<String> reasoningLevels, List<String> input) {
         this.id = id;
         this.name = name;
         this.reasoningLevels = reasoningLevels;
+        this.input = input;
     }
 
     static Model from(JSONObject o) throws JSONException {
         List<String> levels = new ArrayList<>();
         JSONArray arr = o.getJSONArray("reasoning_levels");
         for (int i = 0; i < arr.length(); i++) levels.add(arr.getString(i));
+        List<String> inputs = new ArrayList<>();
+        JSONArray input = o.optJSONArray("input");
+        if (input != null) for (int i = 0; i < input.length(); i++) inputs.add(input.getString(i));
         return new Model(o.getString("id"), o.getString("name"),
-                Collections.unmodifiableList(levels));
+                Collections.unmodifiableList(levels), Collections.unmodifiableList(inputs));
     }
 
     /** How a session's {@code reasoning_level} reads; null leaves it to the harness. */

@@ -33,11 +33,13 @@ final class MessageQueue {
         final String id;
         final String text;
         final InterAgent.Source source;
+        final List<ImageAttachment> images;
 
-        Message(String id, String text, InterAgent.Source source) {
+        Message(String id, String text, InterAgent.Source source, List<ImageAttachment> images) {
             this.id = id;
             this.text = text;
             this.source = source;
+            this.images = images;
         }
     }
 
@@ -136,7 +138,8 @@ final class MessageQueue {
         if (id == null) throw new IllegalArgumentException("missing message_id");
         Object text = item.opt("text");
         if (!(text instanceof String)) throw new IllegalArgumentException("missing text");
-        return new Message(id, (String) text, InterAgent.source(item));
+        return new Message(id, (String) text, InterAgent.source(item),
+                ImageAttachment.parse(item.optJSONArray("images")));
     }
 
     /** A positive JSON integer {@code message_id}, as a string; null when absent or malformed. */

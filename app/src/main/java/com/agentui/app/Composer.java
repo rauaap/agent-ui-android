@@ -39,6 +39,11 @@ final class Composer {
         return new Composer(false, text);
     }
 
+    static Composer parse(String raw, boolean hasImages) {
+        Composer parsed = parse(raw);
+        return parsed == null && hasImages ? new Composer(false, "") : parsed;
+    }
+
     /** Whether the composer should be showing its command styling. */
     static boolean isBash(String raw) {
         Composer parsed = parse(raw);

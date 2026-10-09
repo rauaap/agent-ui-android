@@ -103,7 +103,23 @@ Device smoke checks before release:
   Down keys walk the session's prompt and command history when a keyboard offers
   them; otherwise, hold the composer and drag vertically. A stationary hold and
   release retains the normal text-selection menu, and moving past the newest
-  history entry restores the unsent draft.
+  history entry restores the unsent draft. Composer text and successfully uploaded
+  attachment references survive reopening, scoped to the server and session.
+- **Image attachments** — the inside-right paperclip appears for image-capable session models
+  in prompt mode. Selecting JPEG, PNG, GIF or WebP immediately uploads original
+  bytes without resizing/recompression, with preview, progress/error state and
+  corner **×** removal. Compact aspect-preserving 88×66dp previews sit inside the
+  composer/message bubble and round the actual image corners to 10dp. Tap a preview
+  in the transcript, queue or composer to open a full-screen, fit-to-screen image
+  dialog; close it with **×** or Back. Original cached/selected bytes are decoded
+  at screen resolution off the UI thread, including pending/failed selections.
+  Image-only prompts work; Send refuses unfinished or failed attachments.
+  Limits are 10 MiB per image, 10 images per message, and a server-enforced 20 MiB
+  image-occurrence budget for the queued turn. Pending/replayed images load into
+  fixed placeholders asynchronously. A shared 100 MiB disk cache is keyed by full
+  server download URL and seeded after upload, avoiding redundant downloads;
+  misses use authenticated GET. Removing/sending clears draft references, not
+  cached bytes or server uploads. Failed/in-progress uploads are not saved drafts.
 - **Bash mode** — a message starting with `!` runs as a shell command in the
   session's working directory instead of going to the agent, and its output comes
   back in a red-bordered card the agent never sees. `\!` sends a prompt that
@@ -268,7 +284,10 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
 | `Composer.java`            | the `!` / `\!` split — prompt or shell command (pure, unit tested) |
 | `MessageHistory.java`      | prompt/command recall and in-memory traversal draft restoration (pure, unit tested) |
-| `SessionDraft.java`        | persistent composer text scoped to server/session; saved on lifecycle exit, restored on opening, cleared after send (pure, unit tested) |
+| `SessionDraft.java`        | persistent composer text + uploaded image metadata scoped to server/session (pure, unit tested) |
+| `ImageAttachment.java` / `ImageTransport.java` | ordered image metadata and raw binary upload/download contract (unit tested) |
+| `Images.java` / `ImageDiskCache.java` | background image decoding and shared bounded disk cache keyed by full URL |
+| `ImageViewer.java` / `SelectedImageFile.java` | dismissible full-screen image viewer and composer-owned original selection bytes |
 | `WorktreePath.java`        | the path template, its expansion, and lexical path normalising (pure, unit tested) |
 | `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 

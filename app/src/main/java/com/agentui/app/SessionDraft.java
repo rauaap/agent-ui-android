@@ -1,6 +1,6 @@
 package com.agentui.app;
 
-/** Persistent composer text, scoped to the server and session captured at opening. */
+/** Persistent composer text and uploaded metadata, scoped to the server/session at opening. */
 final class SessionDraft {
     interface Store {
         String get(String key);
@@ -23,6 +23,20 @@ final class SessionDraft {
         if (key == null) return "";
         String text = store.get(key);
         return text == null ? "" : text;
+    }
+
+    java.util.List<ImageAttachment> restoreImages() {
+        if (key != null) try {
+            String saved = store.get("composer_images:" + key);
+            if (saved != null && !saved.isEmpty()) return ImageAttachment.parse(new org.json.JSONArray(saved));
+        } catch (Exception ignored) { /* Corrupt draft metadata is not authoritative. */ }
+        return new java.util.ArrayList<>();
+    }
+
+    void saveImages(java.util.List<ImageAttachment> images) {
+        if (key == null) return;
+        if (images.isEmpty()) store.remove("composer_images:" + key);
+        else store.put("composer_images:" + key, ImageAttachment.metadata(images).toString());
     }
 
     void save(String text) {
