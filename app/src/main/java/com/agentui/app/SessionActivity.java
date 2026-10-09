@@ -123,6 +123,7 @@ public class SessionActivity extends Activity {
     private LinearLayout composerBox; // the bordered frame around input + send
     private boolean bashMode;         // the composer is showing command styling
     private final MessageHistory messageHistory = new MessageHistory();
+    private SessionDraft composerDraft;
     // Successful sends enter history before the server echoes them. Keep their
     // composer forms here so those echoes do not add duplicates.
     private final ArrayDeque<String> pendingHistoryEchoes = new ArrayDeque<>();
@@ -222,7 +223,10 @@ public class SessionActivity extends Activity {
         archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         notifyOn = api.prefs().notifyEnabled(sessionId);
 
+        composerDraft = api.prefs().sessionDraft(sessionId);
         setContentView(buildRoot(sessionName));
+        input.setText(composerDraft.restore());
+        input.setSelection(input.length());
         applyArchived(archived);
         applyStatus(status);
         connect();
@@ -321,8 +325,23 @@ public class SessionActivity extends Activity {
         refreshSessionMetadata();
     }
 
+    private void saveComposerDraft() {
+        if (composerDraft != null && input != null) {
+            composerDraft.save(input.getText().toString());
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        // Also cover older Android versions that may kill a stopped process
+        // after saving instance state but before delivering onStop.
+        saveComposerDraft();
+        super.onSaveInstanceState(outState);
+    }
+
     @Override
     protected void onStop() {
+        saveComposerDraft();
         WatchService.clearViewing(sessionId);
         fileSocketWanted = false;
         disconnectFileSocket();
@@ -331,6 +350,7 @@ public class SessionActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        saveComposerDraft();
         active = false;
         Auth.forget(resumeAuth);
         SessionState.get(api, sessionId).connection(false);
@@ -2796,6 +2816,7 @@ public class SessionActivity extends Activity {
                 messageHistory.add(historyEntry);
                 pendingHistoryEchoes.addLast(historyEntry);
                 input.setText("");
+                composerDraft.save("");
                 applyComposerMode();
             }
         } catch (Exception ignored) {}

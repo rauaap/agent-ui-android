@@ -127,6 +127,17 @@ final class Prefs {
         return host().trim() + ":" + port();
     }
 
+    /** Capture the endpoint now: later settings changes must not move this draft. */
+    SessionDraft sessionDraft(String sessionId) {
+        return new SessionDraft(httpBase(), sessionId, new SessionDraft.Store() {
+            @Override public String get(String key) { return sp.getString(key, ""); }
+            @Override public void put(String key, String text) {
+                sp.edit().putString(key, text).apply();
+            }
+            @Override public void remove(String key) { sp.edit().remove(key).apply(); }
+        });
+    }
+
     /** Base for REST calls, e.g. "http://192.168.1.50:8080" */
     String httpBase() {
         return (tls() ? "https://" : "http://") + authority();

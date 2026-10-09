@@ -267,7 +267,8 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `Json.java`                | id decoding — server ids are JSON numbers, held as opaque strings (pure, unit tested) |
 | `NameGenerator.java`       | `adjective-noun` session-name suggestions from `res/raw` word lists |
 | `Composer.java`            | the `!` / `\!` split — prompt or shell command (pure, unit tested) |
-| `MessageHistory.java`      | prompt/command recall and draft restoration (pure, unit tested) |
+| `MessageHistory.java`      | prompt/command recall and in-memory traversal draft restoration (pure, unit tested) |
+| `SessionDraft.java`        | persistent composer text scoped to server/session; saved on lifecycle exit, restored on opening, cleared after send (pure, unit tested) |
 | `WorktreePath.java`        | the path template, its expansion, and lexical path normalising (pure, unit tested) |
 | `Theme.java` / `Widgets.java` | colours + programmatic view helpers |
 
