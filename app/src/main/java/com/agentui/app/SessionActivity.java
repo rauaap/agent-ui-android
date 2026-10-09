@@ -121,8 +121,7 @@ public class SessionActivity extends Activity {
     private TextView activity;
     private EditText input;
     private TextView sendBtn;
-    private LinearLayout composerBox; // bordered composer field, including previews
-    private LinearLayout composerRow; // field plus separate send control
+    private LinearLayout composerBox; // shared bordered frame around previews, input and send
     private boolean bashMode;         // the composer is showing command styling
     private final MessageHistory messageHistory = new MessageHistory();
     private SessionDraft composerDraft;
@@ -534,13 +533,16 @@ public class SessionActivity extends Activity {
         Widgets.margins(activity, Theme.dp(this, 6), 0, 0, Theme.dp(this, 8));
         footer.addView(activity);
 
-        LinearLayout composer = Widgets.row(this);
-        composerRow = composer;
-        composer.setGravity(Gravity.BOTTOM);
         composerBox = Widgets.column(this);
         composerBox.setBackground(Theme.rounded(this, Theme.PANEL, 18, Theme.LINE, 1));
+        // Preserve the original composer proportions: 44dp controls plus 8dp outer padding.
+        int cp = Theme.dp(this, 8);
+        composerBox.setPadding(cp, cp, cp, cp);
         attachmentPanel = Widgets.column(this);
         composerBox.addView(attachmentPanel);
+        LinearLayout composer = Widgets.row(this);
+        composer.setGravity(Gravity.CENTER_VERTICAL);
+        composerBox.addView(composer, lp(MATCH, WRAP));
         FrameLayout composerInput = new FrameLayout(this);
 
         input = new EditText(this);
@@ -651,8 +653,7 @@ public class SessionActivity extends Activity {
         attachBtn.setVisibility(View.GONE);
         composerInput.addView(attachBtn, attachLp);
         expandImageTouchTarget(composerInput, attachBtn);
-        composerBox.addView(composerInput, lp(MATCH, WRAP));
-        composer.addView(composerBox, lp(0, WRAP, 1f));
+        composer.addView(composerInput, lp(0, WRAP, 1f));
 
         sendBtn = Widgets.primaryButton(this, "↑");
         sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
@@ -667,7 +668,7 @@ public class SessionActivity extends Activity {
         composer.addView(sendBtn);
 
         composerHolder = Widgets.column(this);
-        composerHolder.addView(composer);
+        composerHolder.addView(composerBox);
         footer.addView(composerHolder);
         root.addView(footer);
 
@@ -913,7 +914,7 @@ public class SessionActivity extends Activity {
         if (composerHolder == null) return;
         composerHolder.removeAllViews();
         if (!archived) {
-            composerHolder.addView(composerRow);
+            composerHolder.addView(composerBox);
             return;
         }
 
