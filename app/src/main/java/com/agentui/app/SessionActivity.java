@@ -166,6 +166,7 @@ public class SessionActivity extends Activity {
      */
     private boolean archived;
     private LinearLayout composerHolder; // swaps between the composer and that notice
+    private Boolean renderedArchiveState; // null until the initial composer render
     // Accepted inputs still waiting for a turn, shown above the composer and
     // kept out of the transcript until the server ships them.
     private final MessageQueue messageQueue = new MessageQueue();
@@ -912,6 +913,10 @@ public class SessionActivity extends Activity {
     private void applyArchived(boolean value) {
         archived = value;
         if (composerHolder == null) return;
+        // Replay and metadata refresh repeat the current state. Detaching an
+        // unchanged composer disrupts the focused EditText's input connection.
+        if (renderedArchiveState != null && renderedArchiveState == value) return;
+        renderedArchiveState = value;
         composerHolder.removeAllViews();
         if (!archived) {
             composerHolder.addView(composerBox);
