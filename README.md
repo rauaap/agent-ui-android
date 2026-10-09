@@ -307,6 +307,10 @@ make debug
 
 Output: `app/build/outputs/apk/debug/app-debug.apk`
 
+Debug builds use the `.debug` application ID suffix and the label
+`Agent UI (Debug)`, so debug and release builds can coexist on the same device
+with separate app data. Debug version names have a `-debug` suffix.
+
 Other targets:
 
 ```sh
