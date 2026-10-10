@@ -71,6 +71,15 @@ final class Worktree {
                 o.optString("created_at", ""));
     }
 
+    /** Only an attached worktree explicitly reported missing warrants a warning. */
+    static boolean isMissingFor(Session session, java.util.List<Worktree> worktrees) {
+        if (session.worktreeId.isEmpty()) return false;
+        for (Worktree worktree : worktrees) {
+            if (session.worktreeId.equals(worktree.id)) return !worktree.exists;
+        }
+        return false;
+    }
+
     /** "created on fix-login · 2 sessions", skipping whichever part is absent. */
     String subtitle() {
         StringBuilder s = new StringBuilder();

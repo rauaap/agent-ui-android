@@ -45,6 +45,7 @@ public class ArchivedActivity extends Activity {
     private LinearLayout listContainer;
     /** Labels each card's agent and model; filled before the first render. */
     private final List<Agent> agents = new ArrayList<>();
+    private final List<Worktree> worktrees = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -108,7 +109,8 @@ public class ArchivedActivity extends Activity {
     /**
      * Both listings are needed and both are enough: neither is filtered by the
      * server, so the archive is already in them. The agent catalog is fetched
-     * last, only to label the cards.
+     * to label the cards, then worktrees to mark explicitly missing directories.
+     * A failed worktree load must not prevent reading or restoring the archive.
      */
     private void load() {
         if (!prefs.isConfigured()) {
@@ -141,9 +143,23 @@ public class ArchivedActivity extends Activity {
             @Override public void onResult(List<Agent> list) {
                 agents.clear();
                 agents.addAll(list);
-                render(projects, sessions, null);
+                loadWorktrees(projects, sessions);
             }
             @Override public void onError(String message) { render(null, null, message); }
+        });
+    }
+
+    private void loadWorktrees(List<Project> projects, List<Session> sessions) {
+        worktrees.clear();
+        api.listWorktrees(null, new Api.Cb<List<Worktree>>() {
+            @Override public void onResult(List<Worktree> list) {
+                worktrees.addAll(list);
+                render(projects, sessions, null);
+            }
+            @Override public void onError(String message) {
+                // Missing metadata (including older servers) is not missing disk.
+                render(projects, sessions, null);
+            }
         });
     }
 
@@ -265,6 +281,7 @@ public class ArchivedActivity extends Activity {
         TextView name = Widgets.text(this, s.name, Theme.INK, 16, true);
         name.setLayoutParams(lp(0, WRAP, 1f));
         head.addView(name);
+        SessionCards.addMissingTag(this, head, s, worktrees);
         head.addView(deleteButton(v -> confirmDeleteSession(s)));
         head.addView(restoreButton(v -> restoreSession(s, v)));
         card.addView(head);

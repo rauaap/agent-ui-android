@@ -344,7 +344,9 @@ public class SessionListActivity extends Activity {
      * fallback — "Project directory", plus the form itself — still works.
      */
     private void loadWorktrees() {
-        if (projectDir == null || !projectIsRepo || !worktreesSupported) return;
+        // Existing attachments still need directory warnings even if the
+        // project no longer reports a repository (or its directory is gone).
+        if (!worktreesSupported) return;
         api.listWorktrees(projectDir, new Api.StatusCb<List<Worktree>>() {
             @Override public void onResult(List<Worktree> list) {
                 worktrees.clear();
@@ -482,7 +484,7 @@ public class SessionListActivity extends Activity {
     }
 
     private View sessionCard(Session s) {
-        return SessionCards.build(this, s, projectDir, projectArchived, agents,
+        return SessionCards.build(this, s, projectDir, projectArchived, agents, worktrees,
                 () -> openSession(s), () -> showSessionMenu(s));
     }
 

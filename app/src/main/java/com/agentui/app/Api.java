@@ -273,7 +273,7 @@ final class Api {
     /**
      * The project's worktrees, newest first. The project is identified by path
      * in a query parameter, like every other project-scoped endpoint — an
-     * unknown one is a 404.
+     * unknown one is a 404. A null path lists worktrees across all projects.
      *
      * <p>A 404 is also what a server too old to have {@code /worktrees} gives,
      * so callers that use it to decide whether to offer worktrees at all want
@@ -287,9 +287,9 @@ final class Api {
             post(() -> cb.onError("Bad server address"));
             return;
         }
-        HttpUrl url = base.newBuilder()
-                .addQueryParameter("project_path", projectPath)
-                .build();
+        HttpUrl.Builder urlBuilder = base.newBuilder();
+        if (projectPath != null) urlBuilder.addQueryParameter("project_path", projectPath);
+        HttpUrl url = urlBuilder.build();
         Request req = new Request.Builder().url(url).get().build();
         enqueue(req, cb, body -> {
             List<Worktree> out = new ArrayList<>();

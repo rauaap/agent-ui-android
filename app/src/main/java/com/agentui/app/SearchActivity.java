@@ -29,6 +29,7 @@ public class SearchActivity extends Activity {
     private List<Project> projects = Collections.emptyList();
     private List<Session> sessions = Collections.emptyList();
     private List<Agent> agents = Collections.emptyList();
+    private List<Worktree> worktrees = Collections.emptyList();
     private boolean loading;
     private String error;
     private int loadGeneration;
@@ -122,7 +123,16 @@ public class SearchActivity extends Activity {
         loading = true;
         error = null;
         agents = Collections.emptyList();
+        worktrees = Collections.emptyList();
         render();
+        api.listWorktrees(null, new Api.Cb<List<Worktree>>() {
+            @Override public void onResult(List<Worktree> list) {
+                if (!current(generation)) return;
+                worktrees = list;
+                render();
+            }
+            @Override public void onError(String message) { /* Unknown is not missing. */ }
+        });
         api.listProjects(new Api.StatusCb<List<Project>>() {
             @Override public void onResult(List<Project> list) {
                 if (!current(generation)) return;
@@ -180,7 +190,7 @@ public class SearchActivity extends Activity {
             LinearLayout children = Widgets.column(this);
             children.setPadding(Theme.dp(this, 16), 0, 0, 0);
             for (Session session : group.sessions) {
-                children.addView(SessionCards.build(this, session, p.path, p.isArchived(), agents,
+                children.addView(SessionCards.build(this, session, p.path, p.isArchived(), agents, worktrees,
                         () -> startActivity(SessionActivity.intent(this, session, p.path)), null));
             }
             results.addView(children);
