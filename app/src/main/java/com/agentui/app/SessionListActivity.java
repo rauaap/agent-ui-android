@@ -482,70 +482,8 @@ public class SessionListActivity extends Activity {
     }
 
     private View sessionCard(Session s) {
-        LinearLayout card = Widgets.column(this);
-        card.setBackground(Theme.rounded(this, Theme.PANEL, 14, Theme.LINE, 1));
-        int pad = Theme.dp(this, 16);
-        card.setPadding(pad, pad, pad, pad);
-        LinearLayout.LayoutParams cardLp = lp(MATCH, WRAP);
-        cardLp.bottomMargin = Theme.dp(this, 12);
-        card.setLayoutParams(cardLp);
-        card.setClickable(true);
-        card.setOnClickListener(v -> openSession(s));
-        card.setOnLongClickListener(v -> { showSessionMenu(s); return true; });
-
-        // head: name + badge; delete lives in the long-press menu
-        LinearLayout head = Widgets.row(this);
-        TextView name = Widgets.text(this, s.name, Theme.INK, 16, true);
-        name.setLayoutParams(lp(0, WRAP, 1f));
-        head.addView(name);
-
-        LinearLayout actions = Widgets.row(this);
-        // Under an archived project every row is archived and the header says so
-        // once; a lone archived session is the surprise worth marking.
-        if (s.isArchived() && !projectArchived) {
-            TextView tag = Widgets.tag(this, "archived", Theme.MUTED);
-            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
-            actions.addView(tag);
-        }
-        TextView badge = Widgets.statusBadge(this, s.status);
-        actions.addView(badge);
-        head.addView(actions);
-        card.addView(head);
-
-        // Path — redundant inside a project, where sessions share the project's
-        // directory. A worktree session does not, so its cwd is always shown,
-        // tagged, so it is obvious the session is not running at the root.
-        boolean elsewhere = projectDir == null || !projectDir.equals(s.workingDir);
-        if (elsewhere) {
-            LinearLayout where = Widgets.row(this);
-            if (!s.worktreeId.isEmpty()) {
-                TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
-                Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
-                where.addView(tag);
-            } else if (s.isFormerWorktree(projectDir)) {
-                TextView tag = Widgets.tag(this, "former worktree", Theme.MUTED);
-                Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
-                where.addView(tag);
-            }
-            TextView path = Widgets.mono(this, s.workingDir, Theme.FAINT, 12);
-            path.setSingleLine(true);
-            path.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-            path.setLayoutParams(lp(0, WRAP, 1f));
-            where.addView(path);
-            Widgets.margins(where, 0, Theme.dp(this, 10), 0, 0);
-            card.addView(where);
-        }
-
-        // meta
-        String model = Agent.modelLabel(agents, s.agent, s.model);
-        String meta = formatAgent(s.agent) + (model != null ? "  ·  " + model : "")
-                + (s.reasoningLevel != null ? "  ·  " + s.reasoningLevel : "")
-                + "  ·  " + formatTime(s.lastActiveAt);
-        TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
-        Widgets.margins(metaView, 0, Theme.dp(this, elsewhere ? 8 : 10), 0, 0);
-        card.addView(metaView);
-
-        return card;
+        return SessionCards.build(this, s, projectDir, projectArchived, agents,
+                () -> openSession(s), () -> showSessionMenu(s));
     }
 
     private void openSession(Session s) {
@@ -1120,10 +1058,6 @@ public class SessionListActivity extends Activity {
 
     private void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
-    }
-
-    private String formatAgent(String agent) {
-        return Agent.label(agents, agent);
     }
 
     private static final DateTimeFormatter TIME_FMT =

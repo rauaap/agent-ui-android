@@ -99,6 +99,9 @@ public class ProjectListActivity extends Activity {
         dotLp.rightMargin = Theme.dp(this, 10);
         dot.setLayoutParams(dotLp);
         TextView title = Widgets.text(this, "Agent UI", Theme.INK, 18, true);
+        title.setSingleLine(true);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        title.setLayoutParams(lp(0, WRAP, 1f));
         brandHead.addView(dot);
         brandHead.addView(title);
         projectCount = Widgets.text(this, "", Theme.MUTED, 13, false);
@@ -107,6 +110,16 @@ public class ProjectListActivity extends Activity {
         brand.addView(projectCount);
         brand.setLayoutParams(lp(0, WRAP, 1f));
         topbar.addView(brand);
+
+        android.widget.ImageButton search = new android.widget.ImageButton(this);
+        search.setImageResource(R.drawable.ic_search);
+        search.setColorFilter(Theme.INK);
+        search.setBackground(Widgets.ghostButton(this, "").getBackground());
+        search.setContentDescription("Search projects and sessions");
+        search.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
+        search.setOnClickListener(v -> startActivity(new Intent(this, SearchActivity.class)));
+        Widgets.margins(search, 0, 0, Theme.dp(this, 8), 0);
+        topbar.addView(search);
 
         // Subscription usage is server-wide, like the settings it sits beside,
         // and belongs to no project on this list.
@@ -314,48 +327,8 @@ public class ProjectListActivity extends Activity {
     }
 
     private View projectCard(Project p, List<Session> allSessions) {
-        LinearLayout card = Widgets.column(this);
-        card.setBackground(Theme.rounded(this, Theme.PANEL, 14, Theme.LINE, 1));
-        int pad = Theme.dp(this, 16);
-        card.setPadding(pad, pad, pad, pad);
-        LinearLayout.LayoutParams cardLp = lp(MATCH, WRAP);
-        cardLp.bottomMargin = Theme.dp(this, 12);
-        card.setLayoutParams(cardLp);
-        card.setClickable(true);
-        card.setOnClickListener(v -> openProject(p));
-
-        // head: name + (missing badge, delete)
-        LinearLayout head = Widgets.row(this);
-        TextView name = Widgets.text(this, p.name, Theme.INK, 16, true);
-        name.setLayoutParams(lp(0, WRAP, 1f));
-        head.addView(name);
-
-        String status = aggregateStatus(p, allSessions);
-        if (status != null) {
-            TextView badge = Widgets.statusBadge(this, status);
-            Widgets.margins(badge, Theme.dp(this, 8), 0, 0, 0);
-            head.addView(badge);
-        }
-
-        if (!p.exists) {
-            TextView missing = Widgets.tag(this, "missing", Theme.DANGER);
-            Widgets.margins(missing, Theme.dp(this, 8), 0, 0, 0);
-            head.addView(missing);
-        }
-
-        TextView del = Widgets.text(this, "×", Theme.MUTED, 22, true);
-        int dp32 = Theme.dp(this, 32);
-        del.setGravity(Gravity.CENTER);
-        del.setLayoutParams(lp(dp32, dp32));
-        Widgets.margins(del, Theme.dp(this, 8), 0, 0, 0);
-        del.setClickable(true);
-        del.setOnClickListener(v -> confirmDelete(p));
-        head.addView(del);
-        card.addView(head);
-
-        TextView path = Widgets.mono(this, p.path, p.exists ? Theme.FAINT : Theme.DANGER, 12);
-        Widgets.margins(path, 0, Theme.dp(this, 10), 0, 0);
-        card.addView(path);
+        LinearLayout card = ProjectCards.build(this, p, allSessions,
+                () -> openProject(p), () -> confirmDelete(p));
 
         // session_count is live sessions only, so it never promises sessions the
         // list won't show; archived sessions get their own quiet link rather
@@ -386,17 +359,7 @@ public class ProjectListActivity extends Activity {
      * input wins over running, and idle projects get no indicator.
      */
     private String aggregateStatus(Project project, List<Session> sessions) {
-        if (sessions == null) return null;
-        boolean running = false;
-        for (Session session : sessions) {
-            boolean belongsToProject = !project.id.isEmpty() && !session.projectId.isEmpty()
-                    ? project.id.equals(session.projectId)
-                    : project.path.equals(session.workingDir);
-            if (!belongsToProject) continue;
-            if ("awaiting_approval".equals(session.status)) return "awaiting_approval";
-            if ("running".equals(session.status)) running = true;
-        }
-        return running ? "running" : null;
+        return ProjectCards.aggregateStatus(project, sessions);
     }
 
     private void openArchivedSessions(Project p) {
@@ -418,6 +381,7 @@ public class ProjectListActivity extends Activity {
         i.putExtra(SessionListActivity.EXTRA_PROJECT_DIR, p.path);
         i.putExtra(SessionListActivity.EXTRA_PROJECT_NAME, p.name);
         i.putExtra(SessionListActivity.EXTRA_PROJECT_IS_REPO, p.isGitRepo);
+        i.putExtra(SessionListActivity.EXTRA_PROJECT_ARCHIVED, p.isArchived());
         startActivity(i);
     }
 
@@ -627,7 +591,7 @@ public class ProjectListActivity extends Activity {
      * and deleting the project takes the archive with it — archiving is not a
      * shield against deletion and must not be made to look like one.
      */
-    private static String sessionsPhrase(Project p) {
+    static String sessionsPhrase(Project p) {
         int count = p.sessionCount + p.archivedSessionCount;
         if (count == 0) return "It has no sessions.";
         String phrase = "This removes " + count + (count == 1 ? " session" : " sessions")

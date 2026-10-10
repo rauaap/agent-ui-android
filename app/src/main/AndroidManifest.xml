@@ -27,6 +27,10 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".SearchActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize|stateAlwaysVisible" />
+        <activity
             android:name=".SessionListActivity"
             android:exported="false" />
         <activity
