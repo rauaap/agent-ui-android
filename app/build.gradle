@@ -14,9 +14,9 @@ android {
         minSdk 26
         targetSdk 36
         // Bump explicitly with `make bump-version`, then commit this value.
-        versionCode 25
+        versionCode 26
         // Base name; release.gradle derives "<base>.<versionCode>" for releases.
-        versionName '1.0'
+        versionName '1.1-build'
     }
 
     buildTypes {
