@@ -35,7 +35,8 @@ public class ProjectListActivity extends Activity {
     private ForegroundPoller statusPoller;
     private List<Project> lastProjects;
     private List<Session> lastSessions;
-    private boolean statusPollInFlight;
+    private final RefreshController refresh = new RefreshController();
+    private CatalogRepository catalogs;
 
     /** Set once a server 404s on /projects, so we stop probing it every resume. */
     private boolean legacyServer;
@@ -44,6 +45,7 @@ public class ProjectListActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
+        catalogs = new CatalogRepository(api);
         prefs = api.prefs();
         statusPoller = new ForegroundPoller(3000, this::pollProjectStatuses);
         setContentView(buildRoot());
@@ -72,6 +74,7 @@ public class ProjectListActivity extends Activity {
     @Override
     protected void onPause() {
         statusPoller.stop();
+        refresh.cancel();
         super.onPause();
     }
 
@@ -168,76 +171,65 @@ public class ProjectListActivity extends Activity {
     /* data                                                             */
     /* ---------------------------------------------------------------- */
 
+    private DirectorySnapshot existence = DirectorySnapshot.unknown();
+    private String dataIdentity;
+
     private void loadProjects() {
+        if (!catalogs.identity().equals(dataIdentity)) {
+            refresh.cancel();
+            dataIdentity = catalogs.identity();
+            lastProjects = null;
+            lastSessions = null;
+            legacyServer = false;
+            listContainer.removeAllViews();
+        }
         if (legacyServer) {
             openUnscopedSessions();
             return;
         }
-        projectCount.setText("…");
-        api.listProjects(new Api.StatusCb<List<Project>>() {
-            @Override public void onResult(List<Project> projects) {
-                // Project rows do not carry session state, so fetch the flat
-                // session list and aggregate its statuses onto each card.
-                api.listSessions(new Api.Cb<List<Session>>() {
-                    @Override public void onResult(List<Session> sessions) {
-                        renderList(projects, sessions, null);
-                    }
+        existence = catalogs.cachedExistence();
+        List<Project> cachedProjects = catalogs.cachedProjects();
+        List<Session> cachedSessions = catalogs.cachedSessions();
+        if (cachedProjects != null) renderList(cachedProjects, cachedSessions, null);
+        else projectCount.setText("…");
+        refreshProjects(true);
+    }
 
-                    @Override public void onError(String message) {
-                        // Projects are still useful if this secondary request
-                        // fails; simply omit their live status indicators.
-                        renderList(projects, null, null);
-                    }
-                });
+    private void pollProjectStatuses() { if (lastProjects != null) refreshProjects(false); }
+
+    private void refreshProjects(boolean reportError) {
+        refresh.start(reportError, run -> catalogs.projects(run.progress(new CatalogProgress() {
+            @Override public void projects(List<Project> projects) {
+                if (reportError) renderList(projects, lastSessions, null);
             }
-            @Override public void onError(String message) { renderList(null, null, message); }
-
+            @Override public void sessions(List<Session> sessions) {
+                if (!reportError) return;
+                if (lastProjects != null) renderList(lastProjects, sessions, null);
+                else lastSessions = sessions;
+            }
+        }), run.finish(new Api.StatusCb<CatalogSnapshot>() {
+            @Override public void onResult(CatalogSnapshot snapshot) {
+                boolean changed = lastProjects == null || reportError
+                        || !existence.paths.equals(snapshot.existence.paths)
+                        || projectRowsChanged(snapshot.projects, snapshot.sessions);
+                existence = snapshot.existence;
+                if (changed) renderList(snapshot.projects, snapshot.sessions, null);
+                else {
+                    lastProjects = snapshot.projects;
+                    lastSessions = snapshot.sessions;
+                }
+            }
+            @Override public void onError(String message) {
+                if (reportError && lastProjects == null) renderList(null, null, message);
+            }
             @Override public void onHttpError(int code, String message) {
-                // An older server has no /projects. Fall through to the flat
-                // session list — exactly the behaviour before this screen existed.
+                if (!reportError) return;
                 if (code == 404) {
                     legacyServer = true;
                     openUnscopedSessions();
-                } else {
-                    renderList(null, null, message);
-                }
+                } else renderList(null, null, message);
             }
-        });
-    }
-
-    /**
-     * Refresh the two unfiltered listings already used by this screen. Besides
-     * live badges, this picks up archive changes made on another device: there
-     * is no global WebSocket feed for a project list.
-     */
-    private void pollProjectStatuses() {
-        if (statusPollInFlight || lastProjects == null) return;
-        statusPollInFlight = true;
-        api.listProjects(new Api.StatusCb<List<Project>>() {
-            @Override public void onResult(List<Project> projects) {
-                api.listSessions(new Api.Cb<List<Session>>() {
-                    @Override public void onResult(List<Session> sessions) {
-                        statusPollInFlight = false;
-                        if (projectRowsChanged(projects, sessions)) {
-                            renderList(projects, sessions, null);
-                        } else {
-                            lastProjects = projects;
-                            lastSessions = sessions;
-                        }
-                    }
-
-                    @Override public void onError(String message) {
-                        statusPollInFlight = false;
-                        // Keep the last known rows through a transient failure.
-                    }
-                });
-            }
-
-            @Override public void onError(String message) { statusPollInFlight = false; }
-            @Override public void onHttpError(int code, String message) {
-                statusPollInFlight = false;
-            }
-        });
+        })));
     }
 
     private boolean projectRowsChanged(List<Project> projects, List<Session> sessions) {
@@ -250,8 +242,7 @@ public class ProjectListActivity extends Activity {
                     || before.archivedSessionCount != after.archivedSessionCount
                     || !before.archivedAt.equals(after.archivedAt)
                     || !before.lastActiveAt.equals(after.lastActiveAt)
-                    || !before.name.equals(after.name)
-                    || before.exists != after.exists) return true;
+                    || !before.name.equals(after.name)) return true;
             String oldStatus = aggregateStatus(before, lastSessions);
             String newStatus = aggregateStatus(after, sessions);
             if (oldStatus == null ? newStatus != null : !oldStatus.equals(newStatus)) return true;
@@ -327,7 +318,7 @@ public class ProjectListActivity extends Activity {
     }
 
     private View projectCard(Project p, List<Session> allSessions) {
-        LinearLayout card = ProjectCards.build(this, p, allSessions,
+        LinearLayout card = ProjectCards.build(this, p, allSessions, existence,
                 () -> openProject(p), () -> confirmDelete(p));
 
         // session_count is live sessions only, so it never promises sessions the
@@ -372,7 +363,7 @@ public class ProjectListActivity extends Activity {
     private void openProject(Project p) {
         // Opening a project whose directory is gone would just produce agent
         // errors on the first turn, so explain it up front instead.
-        if (!p.exists) {
+        if (existence.missing(p.path)) {
             showMissingDirectoryDialog(p);
             return;
         }

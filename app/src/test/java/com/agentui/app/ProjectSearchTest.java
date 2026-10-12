@@ -9,8 +9,8 @@ import java.util.Locale;
 import static org.junit.Assert.*;
 
 public class ProjectSearchTest {
-    private final Project app = new Project("1", "/projects/app", "App", 2, 0, "", "", true, true);
-    private final Project old = new Project("2", "/projects/old", "Old", 0, 1, "", "archived", true, false);
+    private final Project app = new Project("1", "/projects/app", "App", 2, 0, "", "", true);
+    private final Project old = new Project("2", "/projects/old", "Old", 0, 1, "", "archived", false);
     private final Session root = session("10", "Refactor", "1", app.path, "");
     private final Session worktree = session("11", "Fix Login", "1", "/worktrees/login", "");
     private final Session archived = session("12", "Login notes", "2", old.path, "archived");

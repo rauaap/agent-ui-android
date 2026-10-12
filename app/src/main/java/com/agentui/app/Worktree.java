@@ -34,14 +34,14 @@ final class Worktree {
      * Zero is an ordinary state — an unused worktree still there to attach to.
      */
     final int sessionCount;
-    /**
-     * Whether the directory is still on disk, {@code stat}ed at request time.
-     * False means it was removed outside the app: attaching a session still
-     * succeeds server-side but the session fails on its first turn, and the
-     * useful move is to clean the row away.
-     */
+    /** Legacy metadata used by archive badges; catalog screens use DirectorySnapshot. */
     final boolean exists;
     final String createdAt;
+
+    Worktree(String id, String projectId, String path, String branch,
+             int sessionCount, String createdAt) {
+        this(id, projectId, path, branch, sessionCount, true, createdAt);
+    }
 
     Worktree(String id, String projectId, String path, String branch,
              int sessionCount, boolean exists, String createdAt) {
@@ -65,8 +65,6 @@ final class Worktree {
                 o.optString("path", ""),
                 branch,
                 o.optInt("session_count", 0),
-                // Default true: a server that does not report it must not make
-                // every worktree look broken.
                 o.optBoolean("exists", true),
                 o.optString("created_at", ""));
     }

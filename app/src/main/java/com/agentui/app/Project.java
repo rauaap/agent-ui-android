@@ -39,8 +39,6 @@ final class Project {
      * reports {@code sessionCount == 0}.
      */
     final String archivedAt;
-    /** Whether the directory is still on the server's disk. */
-    final boolean exists;
     /**
      * Whether the directory has a {@code .git} — a hint, not a guarantee, for
      * whether to offer a worktree. Creating one is where it is really checked.
@@ -48,13 +46,13 @@ final class Project {
     final boolean isGitRepo;
 
     Project(String id, String path, String name, int sessionCount, int archivedSessionCount,
-            String lastActiveAt, String archivedAt, boolean exists, boolean isGitRepo) {
+            String lastActiveAt, String archivedAt, boolean isGitRepo) {
         this(id, path, name, sessionCount, archivedSessionCount, lastActiveAt, archivedAt,
-                exists, isGitRepo, new ArrayList<>(), false, new ArrayList<>());
+                isGitRepo, new ArrayList<>(), false, new ArrayList<>());
     }
 
     private Project(String id, String path, String name, int sessionCount, int archivedSessionCount,
-            String lastActiveAt, String archivedAt, boolean exists, boolean isGitRepo,
+            String lastActiveAt, String archivedAt, boolean isGitRepo,
             List<SandboxPath> sandboxPaths, boolean hasSandboxPaths,
             List<SandboxNetworkDestination> sandboxNetworkAllowlist) {
         this.sandboxNetworkAllowlist = sandboxNetworkAllowlist;
@@ -67,7 +65,6 @@ final class Project {
         this.archivedSessionCount = archivedSessionCount;
         this.lastActiveAt = lastActiveAt;
         this.archivedAt = archivedAt;
-        this.exists = exists;
         this.isGitRepo = isGitRepo;
     }
 
@@ -108,9 +105,6 @@ final class Project {
                 lastActive,
                 // Same "null" trap as last_active_at, and the same treatment.
                 o.isNull("archived_at") ? "" : o.optString("archived_at", ""),
-                // Default true: a server that does not report it must not make
-                // every project look broken.
-                o.optBoolean("exists", true),
                 // Default false: a server that does not report it cannot make
                 // worktrees either, so the toggle stays hidden.
                 o.optBoolean("is_git_repo", false), pathsFrom(o), o.optJSONArray("sandbox_paths") != null,

@@ -48,7 +48,9 @@ public class SessionListActivity extends Activity {
     private TextView sessionCount;
     private LinearLayout listContainer;
     private ForegroundPoller statusPoller;
-    private boolean statusPollInFlight;
+    private final RefreshController refresh = new RefreshController();
+    private final RefreshController agentRefresh = new RefreshController();
+    private CatalogRepository catalogs;
 
     /** Working directory this list is scoped to, or null when unscoped. */
     private String projectDir;
@@ -94,6 +96,7 @@ public class SessionListActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
+        catalogs = new CatalogRepository(api);
         prefs = api.prefs();
         statusPoller = new ForegroundPoller(3000, this::pollSessionStatuses);
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
@@ -131,6 +134,8 @@ public class SessionListActivity extends Activity {
     @Override
     protected void onPause() {
         statusPoller.stop();
+        refresh.cancel();
+        agentRefresh.cancel();
         super.onPause();
     }
 
@@ -243,44 +248,73 @@ public class SessionListActivity extends Activity {
     /* data                                                             */
     /* ---------------------------------------------------------------- */
 
+    private String dataIdentity;
+
     private void loadSessions() {
-        sessionCount.setText("…");
+        if (!catalogs.identity().equals(dataIdentity)) {
+            refresh.cancel();
+            agentRefresh.cancel();
+            dataIdentity = catalogs.identity();
+            lastSessions = null;
+            worktreesSupported = true;
+            listContainer.removeAllViews();
+        }
+        existence = catalogs.cachedExistence();
+        List<Worktree> cachedWorktrees = catalogs.cachedWorktrees(projectDir);
+        worktrees.clear();
+        if (cachedWorktrees != null) worktrees.addAll(cachedWorktrees);
+        List<Session> cachedSessions = catalogs.cachedSessions();
+        if (cachedSessions != null) renderList(scopeToProject(cachedSessions), null);
+        else sessionCount.setText("…");
         // Do not carry one server's registry into another after Settings changes
         // the address. Cards show raw ids until the fresh list lands.
         agents.clear();
         agentsError = null;
         loadAgents();
-        loadWorktrees();
-        api.listSessions(new Api.Cb<List<Session>>() {
-            @Override public void onResult(List<Session> sessions) {
-                renderList(scopeToProject(sessions), null);
-            }
-            @Override public void onError(String message) { renderList(null, message); }
-        });
+        refreshCatalogs(true);
     }
 
-    /** Refresh live badges without repeating the agents and worktrees loads. */
-    private void pollSessionStatuses() {
-        if (statusPollInFlight) return;
-        statusPollInFlight = true;
-        api.listSessions(new Api.Cb<List<Session>>() {
-            @Override public void onResult(List<Session> sessions) {
-                statusPollInFlight = false;
-                List<Session> scoped = scopeToProject(sessions);
-                if (sessionStatusesChanged(scoped)) {
-                    renderList(scoped, null);
-                } else {
-                    // Keep non-visible fields fresh for actions that consult the
-                    // cached list, without rebuilding the UI every three seconds.
-                    lastSessions = scoped;
-                }
-            }
+    private DirectorySnapshot existence = DirectorySnapshot.unknown();
 
-            @Override public void onError(String message) {
-                statusPollInFlight = false;
-                // Keep the last known list through a transient polling failure.
-            }
-        });
+    private void pollSessionStatuses() { refreshCatalogs(false); }
+
+    private void refreshCatalogs(boolean reportError) {
+        refresh.start(reportError, run -> catalogs.sessions(
+                projectIsRepo && worktreesSupported ? projectDir : null,
+                run.progress(new CatalogProgress() {
+                    @Override public void sessions(List<Session> sessions) {
+                        List<Session> fresh = scopeToProject(sessions);
+                        if (reportError || sessionStatusesChanged(fresh)) renderList(fresh, null);
+                        else lastSessions = fresh;
+                    }
+                    @Override public void worktrees(List<Worktree> fresh) {
+                        boolean changed = worktreeRowsChanged(fresh);
+                        worktrees.clear();
+                        worktrees.addAll(fresh);
+                        if (changed && lastSessions != null) renderList(lastSessions, null);
+                    }
+                }), run.finish(new Api.Cb<CatalogSnapshot>() {
+                    @Override public void onResult(CatalogSnapshot snapshot) {
+                        boolean changed = !existence.paths.equals(snapshot.existence.paths)
+                                || (worktreesSupported && !snapshot.worktreesSupported);
+                        worktreesSupported &= snapshot.worktreesSupported;
+                        existence = snapshot.existence;
+                        if (changed && lastSessions != null) renderList(lastSessions, null);
+                    }
+                    @Override public void onError(String message) {
+                        if (reportError && lastSessions == null) renderList(null, message);
+                    }
+                })));
+    }
+
+    private boolean worktreeRowsChanged(List<Worktree> fresh) {
+        if (worktrees.size() != fresh.size()) return true;
+        for (int i = 0; i < fresh.size(); i++) {
+            Worktree before = worktrees.get(i), after = fresh.get(i);
+            if (!before.id.equals(after.id) || !before.path.equals(after.path)
+                    || !before.branch.equals(after.branch) || before.sessionCount != after.sessionCount) return true;
+        }
+        return false;
     }
 
     private boolean sessionStatusesChanged(List<Session> sessions) {
@@ -312,7 +346,7 @@ public class SessionListActivity extends Activity {
      */
     private void loadAgents() {
         agentsLoading = true;
-        api.listAgents(new Api.Cb<List<Agent>>() {
+        agentRefresh.start(false, run -> catalogs.agents(run.finish(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
                 agents.clear();
                 agents.addAll(list);
@@ -329,7 +363,7 @@ public class SessionListActivity extends Activity {
                 agentsLoading = false;
                 openPendingNewSession();
             }
-        });
+        })));
     }
 
     private void openPendingNewSession() {
@@ -338,37 +372,7 @@ public class SessionListActivity extends Activity {
         showNewSessionDialog();
     }
 
-    /**
-     * The project's worktrees, for the picker and the header row. A failure is
-     * silent: the session list is what this screen is for, and the picker's
-     * fallback — "Project directory", plus the form itself — still works.
-     */
-    private void loadWorktrees() {
-        // Existing attachments still need directory warnings even if the
-        // project no longer reports a repository (or its directory is gone).
-        if (!worktreesSupported) return;
-        api.listWorktrees(projectDir, new Api.StatusCb<List<Worktree>>() {
-            @Override public void onResult(List<Worktree> list) {
-                worktrees.clear();
-                worktrees.addAll(list);
-                // The header row counts them, and the list is already on screen
-                // by the time this lands as often as not.
-                if (lastSessions != null) renderList(lastSessions, null);
-            }
-
-            @Override public void onError(String message) {}
-
-            @Override public void onHttpError(int code, String message) {
-                // A server old enough to create worktrees only as part of a
-                // session has no /worktrees at all. Stop asking, and stop
-                // offering a picker whose every option would 404.
-                if (code == 404) {
-                    worktreesSupported = false;
-                    worktrees.clear();
-                }
-            }
-        });
-    }
+    private void loadWorktrees() { refreshCatalogs(false); }
 
     /**
      * Keep only this project's sessions. The REST API stays flat — every row
@@ -484,7 +488,7 @@ public class SessionListActivity extends Activity {
     }
 
     private View sessionCard(Session s) {
-        return SessionCards.build(this, s, projectDir, projectArchived, agents, worktrees,
+        return SessionCards.build(this, s, projectDir, projectArchived, agents, existence,
                 () -> openSession(s), () -> showSessionMenu(s));
     }
 
@@ -904,8 +908,9 @@ public class SessionListActivity extends Activity {
         List<CharSequence> labels = new ArrayList<>();
         labels.add(PROJECT_DIRECTORY);
         int checked = 0;
-        for (int i = 0; i < worktrees.size(); i++) {
-            Worktree w = worktrees.get(i);
+        List<Worktree> choices = new ArrayList<>(worktrees);
+        for (int i = 0; i < choices.size(); i++) {
+            Worktree w = choices.get(i);
             labels.add(pickerLabel(w));
             if (w.id.equals(worktreeId[0])) checked = i + 1;
         }
@@ -930,8 +935,8 @@ public class SessionListActivity extends Activity {
                                 });
                         return;
                     }
-                    Worktree w = worktrees.get(which - 1);
-                    if (!w.exists) confirmMissingDirectory(w, picker, worktreeId);
+                    Worktree w = choices.get(which - 1);
+                    if (existence.missing(w.path)) confirmMissingDirectory(w, picker, worktreeId);
                     else selectWorktree(picker, worktreeId, w);
                 })
                 .setNegativeButton("Cancel", null)
@@ -943,10 +948,10 @@ public class SessionListActivity extends Activity {
      * with another session is a supported choice, so the session count is said
      * plainly rather than warned about.
      */
-    private static String pickerLabel(Worktree w) {
+    private String pickerLabel(Worktree w) {
         String label = w.path;
         String subtitle = w.subtitle();
-        if (!w.exists) {
+        if (existence.missing(w.path)) {
             subtitle = subtitle.isEmpty()
                     ? "directory missing" : subtitle + "  ·  directory missing";
         }

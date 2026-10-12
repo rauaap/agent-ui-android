@@ -51,6 +51,7 @@ public class SessionSettingsActivity extends Activity {
     static final String EXTRA_JUST_ARCHIVED = "just_archived";
 
     private Api api;
+    private CatalogRepository catalogs;
     private String sessionId;
     private String sessionName;
     private String status;
@@ -83,6 +84,7 @@ public class SessionSettingsActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
+        catalogs = new CatalogRepository(api);
         sessionId = getIntent().getStringExtra(EXTRA_ID);
         state = SessionState.get(api, sessionId);
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
@@ -114,7 +116,7 @@ public class SessionSettingsActivity extends Activity {
             }
             @Override public void onError(String message) { toast(message); renderState(); }
         });
-        api.listAgents(new Api.Cb<java.util.List<Agent>>() {
+        catalogs.agents(new Api.Cb<java.util.List<Agent>>() {
             @Override public void onResult(java.util.List<Agent> list) {
                 agents.clear();
                 agents.addAll(list);

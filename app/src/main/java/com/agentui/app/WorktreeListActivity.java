@@ -35,6 +35,10 @@ public class WorktreeListActivity extends Activity {
     static final String EXTRA_PROJECT_ARCHIVED = "project_archived";
 
     private Api api;
+    private final ForegroundPoller poller = new ForegroundPoller(3000, this::loadWorktrees);
+    private final RefreshController refresh = new RefreshController();
+    private final RefreshController actions = new RefreshController();
+    private CatalogRepository catalogs;
     private String projectDir;
     private String projectName;
     /**
@@ -54,6 +58,7 @@ public class WorktreeListActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
+        catalogs = new CatalogRepository(api);
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
         projectName = getIntent().getStringExtra(EXTRA_PROJECT_NAME);
         projectArchived = getIntent().getBooleanExtra(EXTRA_PROJECT_ARCHIVED, false);
@@ -68,6 +73,14 @@ public class WorktreeListActivity extends Activity {
     protected void onResume() {
         super.onResume();
         load();
+        poller.start();
+    }
+
+    @Override protected void onPause() {
+        poller.stop();
+        refresh.cancel();
+        actions.cancel();
+        super.onPause();
     }
 
     /* ---------------------------------------------------------------- */
@@ -140,14 +153,31 @@ public class WorktreeListActivity extends Activity {
     /* ---------------------------------------------------------------- */
 
     private void load() {
-        worktreeCount.setText("…");
+        existence = catalogs.cachedExistence();
+        List<Worktree> cached = catalogs.cachedWorktrees(projectDir);
+        if (cached != null) render(cached, null);
+        else worktreeCount.setText("…");
         loadWorktrees();
     }
 
-    private void loadWorktrees() {
-        api.listWorktrees(projectDir, new Api.Cb<List<Worktree>>() {
-            @Override public void onResult(List<Worktree> worktrees) { render(worktrees, null); }
-            @Override public void onError(String message) { render(null, message); }
+    private DirectorySnapshot existence = DirectorySnapshot.unknown();
+
+    private void loadWorktrees() { refreshWorktrees(false); }
+
+    private void refreshWorktrees(boolean afterRemoval) {
+        refresh.start(afterRemoval, run -> {
+            Api.Cb<CatalogSnapshot> result = run.finish(new Api.Cb<CatalogSnapshot>() {
+                @Override public void onResult(CatalogSnapshot snapshot) {
+                    sessions = snapshot.sessions;
+                    existence = snapshot.existence;
+                    render(snapshot.worktrees, null);
+                }
+                @Override public void onError(String message) { render(null, message); }
+            });
+            if (afterRemoval) catalogs.removal(projectDir, run.progress(new CatalogProgress() {}), result);
+            else catalogs.worktrees(projectDir, run.progress(new CatalogProgress() {
+                @Override public void worktrees(List<Worktree> worktrees) { render(worktrees, null); }
+            }), result);
         });
     }
 
@@ -180,13 +210,13 @@ public class WorktreeListActivity extends Activity {
         card.setLayoutParams(cardLp);
 
         LinearLayout head = Widgets.row(this);
-        TextView path = Widgets.mono(this, w.path, w.exists ? Theme.INK : Theme.DANGER, 13);
+        TextView path = Widgets.mono(this, w.path, existence.missing(w.path) ? Theme.DANGER : Theme.INK, 13);
         path.setSingleLine(true);
         path.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
         path.setLayoutParams(lp(0, WRAP, 1f));
         head.addView(path);
 
-        if (!w.exists) {
+        if (existence.missing(w.path)) {
             TextView tag = Widgets.tag(this, "missing", Theme.DANGER);
             Widgets.margins(tag, Theme.dp(this, 8), 0, 0, 0);
             head.addView(tag);
@@ -215,7 +245,7 @@ public class WorktreeListActivity extends Activity {
         Widgets.margins(metaRow, 0, Theme.dp(this, 8), 0, 0);
         card.addView(metaRow);
 
-        if (!w.exists) {
+        if (existence.missing(w.path)) {
             TextView gone = Widgets.text(this,
                     "The directory was removed outside the app. Clean it up to drop "
                             + "the entry — a session started here would fail on its first turn.",
@@ -254,29 +284,26 @@ public class WorktreeListActivity extends Activity {
 
     /** Refresh immediately before confirmation so the advisory warning is not stale. */
     private void prepareRemove(Worktree w) {
-        api.listSessions(new Api.Cb<List<Session>>() {
-            @Override public void onResult(List<Session> result) {
-                sessions = result;
+        actions.start(false, run -> catalogs.removal(projectDir, run.progress(new CatalogProgress() {}), run.finish(new Api.Cb<CatalogSnapshot>() {
+            @Override public void onResult(CatalogSnapshot snapshot) {
+                sessions = snapshot.sessions;
+                existence = snapshot.existence;
+                render(snapshot.worktrees, null);
                 confirmRemove(w);
             }
             @Override public void onError(String message) {
                 toast("Can't verify sessions using this directory: " + message);
             }
-        });
+        })));
     }
 
     /**
      * "Clean up" for a worktree whose directory is already gone — git prunes
-     * its own admin files and the row goes with it, so there is nothing to
-     * delete and nothing to lose.
+     * its own admin files and the row goes with it. Session paths stay preserved.
      */
     private void confirmRemove(Worktree w) {
-        int archivedDependents = archivedDetachedSessions(w);
-        if (!w.exists) {
-            String dependency = archivedDependents == 0 ? "" : "\n\n" + archivedDependents
-                    + (archivedDependents == 1 ? " archived session uses" : " archived sessions use")
-                    + " this former working directory and already cannot be unarchived until "
-                    + "the same absolute path is recreated.";
+        String dependency = WorktreeRemoval.warning(w, sessions);
+        if (existence.missing(w.path)) {
             new AlertDialog.Builder(this)
                     .setTitle("Clean up worktree")
                     .setMessage("The directory is already gone:\n\n" + w.path
@@ -286,11 +313,6 @@ public class WorktreeListActivity extends Activity {
                     .show();
             return;
         }
-        String dependency = archivedDependents == 0 ? "" : "\n\nThis directory is the former "
-                + "working directory of " + archivedDependents
-                + (archivedDependents == 1 ? " archived session. " : " archived sessions. ")
-                + "Deleting it will prevent " + (archivedDependents == 1 ? "that session" : "those sessions")
-                + " from being unarchived until a directory is recreated at the same absolute path.";
         new AlertDialog.Builder(this)
                 .setTitle("Delete worktree")
                 .setMessage("Delete the worktree at\n\n" + w.path
@@ -301,85 +323,43 @@ public class WorktreeListActivity extends Activity {
                 .show();
     }
 
-    private int archivedDetachedSessions(Worktree w) {
-        int count = 0;
-        for (Session session : sessions) {
-            if (session.dependsOnFormerWorktree(w, projectDir)
-                    && session.isArchived()) count++;
-        }
-        return count;
-    }
-
     private static String branchPhrase(Worktree w) {
         return w.branch.isEmpty() ? "its branch" : "\"" + w.branch + "\"";
     }
 
+    private void removedRefresh() { refreshWorktrees(true); }
+
     private void remove(Worktree w) {
-        api.deleteWorktree(w.id, new Api.StatusCb<Void>() {
-            @Override public void onResult(Void ignored) { load(); }
+        actions.start(false, run -> api.deleteWorktree(w.id, run.finish(new Api.StatusCb<Void>() {
+            @Override public void onResult(Void ignored) { removedRefresh(); }
 
             @Override public void onError(String message) {
+                removedRefresh(); // Git removal may have succeeded before a database failure.
                 toast("Unable to remove: " + message);
             }
 
             @Override public void onHttpError(int code, String message) {
                 if (code == 404) {
                     // Already gone server-side; the list is simply stale.
-                    load();
+                    removedRefresh();
                     return;
                 }
                 if (code == 409) {
                     // Nothing was removed and the row is still there, so the
                     // list is re-rendered from unchanged state rather than
                     // dropping the worktree optimistically.
-                    load();
-                    if (message.contains("live detached session")) liveDetachedDialog(message);
-                    else if (message.contains("still using this worktree")) inUseDialog(message);
-                    else dirtyDialog(w);
+                    removedRefresh();
+                    new AlertDialog.Builder(WorktreeListActivity.this)
+                            .setTitle("Left in place")
+                            .setMessage(message + "\n\nWait for active agent turns and shell commands "
+                                    + "to finish. If Git refused removal, resolve its safety checks, then retry.")
+                            .setPositiveButton("OK", null).show();
                     return;
                 }
+                removedRefresh();
                 toast("Unable to remove: " + message);
             }
-        });
-    }
-
-    /**
-     * Sessions are still attached. There is no force for this case — the way
-     * out is through those sessions, which the server names.
-     */
-    private void inUseDialog(String detail) {
-        new AlertDialog.Builder(this)
-                .setTitle("Worktree still in use")
-                .setMessage(detail + "\n\nA live session must be deleted, or archived and then "
-                        + "detached from Session settings. An archived session can be detached "
-                        + "directly from its settings. Then retry the worktree deletion.")
-                .setPositiveButton("OK", null)
-                .show();
-    }
-
-    private void liveDetachedDialog(String detail) {
-        new AlertDialog.Builder(this)
-                .setTitle("Directory still in use")
-                .setMessage(detail + "\n\nThese sessions still run from the former worktree "
-                        + "directory. Archive them before retrying; they will not be changed "
-                        + "automatically.")
-                .setPositiveButton("OK", null)
-                .show();
-    }
-
-    /**
-     * The common outcome for any worktree an agent did real work in: git counts
-     * untracked files as dirty. Information, not an error — and deliberately
-     * not an offer to force it, which the server does not accept.
-     */
-    private void dirtyDialog(Worktree w) {
-        new AlertDialog.Builder(this)
-                .setTitle("Left in place")
-                .setMessage(WorktreePath.basename(w.path) + " has uncommitted work, so it "
-                        + "was left in place. Commit or discard the changes there, then "
-                        + "try again.")
-                .setPositiveButton("OK", null)
-                .show();
+        })));
     }
 
     /** Opens this screen for a project. */

@@ -24,7 +24,7 @@ final class SessionCards {
     }
 
     static View build(Context context, Session s, String projectDir, boolean projectArchived,
-                      List<Agent> agents, List<Worktree> worktrees, Runnable open, Runnable menu) {
+                      List<Agent> agents, DirectorySnapshot existence, Runnable open, Runnable menu) {
         LinearLayout card = Widgets.column(context);
         card.setBackground(Theme.rounded(context, Theme.PANEL, 14, Theme.LINE, 1));
         int pad = Theme.dp(context, 16);
@@ -41,7 +41,6 @@ final class SessionCards {
         name.setLayoutParams(lp(0, WRAP, 1f));
         head.addView(name);
         LinearLayout actions = Widgets.row(context);
-        addMissingTag(context, actions, s, worktrees);
         if (s.isArchived() && !projectArchived) {
             TextView tag = Widgets.tag(context, "archived", Theme.MUTED);
             Widgets.margins(tag, 0, 0, Theme.dp(context, 8), 0);
@@ -53,7 +52,7 @@ final class SessionCards {
 
         // A worktree's directory differs from its project's, so keep it visible.
         boolean elsewhere = projectDir == null || !projectDir.equals(s.workingDir);
-        if (elsewhere) {
+        if (elsewhere || existence.missing(s.workingDir)) {
             LinearLayout where = Widgets.row(context);
             if (!s.worktreeId.isEmpty()) {
                 TextView tag = Widgets.tag(context, "worktree", Theme.INFO);
@@ -64,7 +63,13 @@ final class SessionCards {
                 Widgets.margins(tag, 0, 0, Theme.dp(context, 8), 0);
                 where.addView(tag);
             }
-            TextView path = Widgets.mono(context, s.workingDir, Theme.FAINT, 12);
+            if (existence.missing(s.workingDir)) {
+                TextView tag = Widgets.tag(context, "missing", Theme.DANGER);
+                Widgets.margins(tag, 0, 0, Theme.dp(context, 8), 0);
+                where.addView(tag);
+            }
+            TextView path = Widgets.mono(context, s.workingDir,
+                    existence.missing(s.workingDir) ? Theme.DANGER : Theme.FAINT, 12);
             path.setSingleLine(true);
             path.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
             path.setLayoutParams(lp(0, WRAP, 1f));

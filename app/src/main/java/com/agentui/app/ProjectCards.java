@@ -16,12 +16,12 @@ import static com.agentui.app.Widgets.lp;
 /** Shared project card header and path; callers can append list-only metadata. */
 final class ProjectCards {
     static LinearLayout build(Context context, Project p, List<Session> sessions,
-                              Runnable open, Runnable delete) {
-        return build(context, p, sessions, open, 0, "Delete project", delete);
+                              DirectorySnapshot existence, Runnable open, Runnable delete) {
+        return build(context, p, sessions, existence, open, 0, "Delete project", delete);
     }
 
     static LinearLayout build(Context context, Project p, List<Session> sessions,
-                              Runnable open, int actionIcon, String actionDescription,
+                              DirectorySnapshot existence, Runnable open, int actionIcon, String actionDescription,
                               Runnable action) {
         LinearLayout card = Widgets.column(context);
         card.setBackground(Theme.rounded(context, Theme.PANEL, 14, Theme.LINE, 1));
@@ -47,7 +47,7 @@ final class ProjectCards {
             Widgets.margins(tag, Theme.dp(context, 8), 0, 0, 0);
             head.addView(tag);
         }
-        if (!p.exists) {
+        if (existence.missing(p.path)) {
             TextView tag = Widgets.tag(context, "missing", Theme.DANGER);
             Widgets.margins(tag, Theme.dp(context, 8), 0, 0, 0);
             head.addView(tag);
@@ -73,7 +73,7 @@ final class ProjectCards {
         actionButton.setOnClickListener(v -> action.run());
         head.addView(actionButton);
         card.addView(head);
-        TextView path = Widgets.mono(context, p.path, p.exists ? Theme.FAINT : Theme.DANGER, 12);
+        TextView path = Widgets.mono(context, p.path, existence.missing(p.path) ? Theme.DANGER : Theme.FAINT, 12);
         Widgets.margins(path, 0, Theme.dp(context, 10), 0, 0);
         card.addView(path);
         return card;

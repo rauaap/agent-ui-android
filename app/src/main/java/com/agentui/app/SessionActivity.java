@@ -85,6 +85,8 @@ public class SessionActivity extends Activity {
     }
 
     private Api api;
+    private CatalogRepository catalogs;
+    private final RefreshController agentRefresh = new RefreshController();
     private String sessionId;
     private String sessionName;
     private String sessionAgent = "";
@@ -224,6 +226,8 @@ public class SessionActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
+        catalogs = new CatalogRepository(api);
+        existence = catalogs.cachedExistence();
         sessionId = getIntent().getStringExtra(EXTRA_ID);
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
         sessionAgent = getIntent().getStringExtra(EXTRA_AGENT);
@@ -257,14 +261,13 @@ public class SessionActivity extends Activity {
         renderComposerImages();
         applyArchived(archived);
         applyStatus(status);
+        restoreCachedMetadata();
         connect();
-        refreshSessionMetadata();
-        loadAgents();
     }
 
     /** Load the server's display name for the adapter used by this session. */
     private void loadAgents() {
-        api.listAgents(new Api.Cb<List<Agent>>() {
+        agentRefresh.start(false, run -> catalogs.agents(run.finish(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
                 agents.clear();
                 agents.addAll(list);
@@ -274,7 +277,7 @@ public class SessionActivity extends Activity {
 
             // The raw id stays as the label.
             @Override public void onError(String message) {}
-        });
+        })));
     }
 
     private String agentChatLabel() {
@@ -292,57 +295,71 @@ public class SessionActivity extends Activity {
      * refreshes effective cwd/worktree metadata, especially for notification
      * intents that carry only an id and name.
      */
-    private void refreshSessionMetadata() {
-        if (sessionId == null || sessionId.isEmpty()) return;
-        api.listSessions(new Api.Cb<java.util.List<Session>>() {
-            @Override public void onResult(java.util.List<Session> sessions) {
-                directory = new java.util.HashMap<>();
-                for (Session session : sessions) directory.put(session.id, session);
-                for (Runnable view : directoryViews) view.run();
-                for (Session session : sessions) {
-                    if (!session.id.equals(sessionId)) continue;
-                    sessionName = session.name;
-                    nameView.setText(session.name);
-                    sessionAgent = session.agent;
-                    sessionModel = session.model;
-                    updateAgentLabels();
-                    updateImageCapability();
-                    projectId = session.projectId;
-                    workingDir = session.workingDir;
-                    worktreeId = session.worktreeId;
-                    autoApproveWrite = session.autoApproveWrite;
-                    autoApproveCommand = session.autoApproveCommand;
-                    autoApproveInterAgent = session.autoApproveInterAgent;
-                    applyArchived(session.isArchived());
-                    applyStatus(session.status);
-                    renderPending();
-                    if (projectDir == null && !projectId.isEmpty()) loadProjectPath();
-                    else renderLocation();
-                    // Notification intents may initially carry only id/name, so
-                    // onStart could not subscribe until REST supplied the cwd.
-                    if (fileSocketWanted && fileSocket == null) connectFileSocket();
-                    return;
-                }
-            }
-            @Override public void onError(String message) {
-                // The socket and intent metadata still leave the transcript usable.
-            }
-        });
+    private DirectorySnapshot existence = DirectorySnapshot.unknown();
+    private final ForegroundPoller metadataPoller = new ForegroundPoller(3000, this::refreshSessionMetadata);
+    private final RefreshController metadataRefresh = new RefreshController();
+
+    private void restoreCachedMetadata() {
+        java.util.List<Session> sessions = catalogs.cachedSessions();
+        if (sessions != null) applySessionMetadata(sessions);
+        java.util.List<Project> projects = catalogs.cachedProjects();
+        if (projects != null) resolveProjectPath(projects);
+        renderLocation();
     }
 
-    private void loadProjectPath() {
-        api.listProjects(new Api.StatusCb<java.util.List<Project>>() {
-            @Override public void onResult(java.util.List<Project> projects) {
-                for (Project project : projects) {
-                    if (project.id.equals(projectId)) {
-                        projectDir = project.path;
-                        break;
-                    }
+    private void resolveProjectPath(java.util.List<Project> projects) {
+        if (projectDir != null) return;
+        for (Project project : projects) {
+            if (project.id.equals(projectId)) { projectDir = project.path; break; }
+        }
+        renderLocation();
+    }
+
+    private void applySessionMetadata(java.util.List<Session> sessions) {
+        directory = new java.util.HashMap<>();
+        for (Session session : sessions) directory.put(session.id, session);
+        for (Runnable view : directoryViews) view.run();
+        for (Session session : sessions) {
+            if (!session.id.equals(sessionId)) continue;
+            sessionName = session.name;
+            nameView.setText(session.name);
+            sessionAgent = session.agent;
+            sessionModel = session.model;
+            updateAgentLabels();
+            updateImageCapability();
+            projectId = session.projectId;
+            workingDir = session.workingDir;
+            worktreeId = session.worktreeId;
+            autoApproveWrite = session.autoApproveWrite;
+            autoApproveCommand = session.autoApproveCommand;
+            autoApproveInterAgent = session.autoApproveInterAgent;
+            applyArchived(session.isArchived());
+            applyStatus(session.status);
+            renderPending();
+            renderLocation();
+            if (fileSocketWanted && fileSocket == null) connectFileSocket();
+            return;
+        }
+    }
+
+    private void refreshSessionMetadata() {
+        if (sessionId == null || sessionId.isEmpty()) return;
+        metadataRefresh.start(false, run -> {
+            CatalogProgress progress = run.progress(new CatalogProgress() {
+                @Override public void sessions(java.util.List<Session> sessions) { applySessionMetadata(sessions); }
+            });
+            Api.Cb<CatalogSnapshot> result = run.finish(new Api.Cb<CatalogSnapshot>() {
+                @Override public void onResult(CatalogSnapshot snapshot) {
+                    existence = snapshot.existence;
+                    resolveProjectPath(snapshot.projects);
+                    renderLocation();
                 }
-                renderLocation();
-            }
-            @Override public void onError(String message) {}
-            @Override public void onHttpError(int code, String message) {}
+                @Override public void onError(String message) {
+                    // The socket, intent and cached metadata leave the transcript usable.
+                }
+            });
+            if (projectDir == null) catalogs.projects(progress, result);
+            else catalogs.chat(progress, result);
         });
     }
 
@@ -351,6 +368,8 @@ public class SessionActivity extends Activity {
         super.onStart();
         // While this session is on screen, suppress its completion notifications.
         WatchService.setViewing(sessionId);
+        metadataPoller.start();
+        loadAgents();
         fileSocketWanted = true;
         connectFileSocket();
         refreshSessionMetadata();
@@ -373,6 +392,9 @@ public class SessionActivity extends Activity {
 
     @Override
     protected void onStop() {
+        metadataPoller.stop();
+        metadataRefresh.cancel();
+        agentRefresh.cancel();
         saveComposerDraft();
         WatchService.clearViewing(sessionId);
         fileSocketWanted = false;
@@ -896,7 +918,13 @@ public class SessionActivity extends Activity {
             Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
             locationHolder.addView(tag);
         }
-        TextView dirView = Widgets.mono(this, workingDir, Theme.FAINT, 12);
+        if (existence.missing(workingDir)) {
+            TextView tag = Widgets.tag(this, "missing", Theme.DANGER);
+            Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
+            locationHolder.addView(tag);
+        }
+        TextView dirView = Widgets.mono(this, workingDir,
+                existence.missing(workingDir) ? Theme.DANGER : Theme.FAINT, 12);
         dirView.setMaxLines(1);
         dirView.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
         dirView.setLayoutParams(lp(WRAP, WRAP, 1f));

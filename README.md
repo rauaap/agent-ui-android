@@ -87,8 +87,11 @@ Device smoke checks before release:
   the path template from Settings and tracking the branch until you edit it by
   hand; **Reset** ties it back. Removal is never forced, so a worktree holding
   uncommitted *or untracked* files is left in place and said so, which is the
-  common outcome for one an agent worked in. Deleting a session removes nothing
-  from disk.
+  common outcome for one an agent worked in. Removing a worktree preserves all
+  sessions and their original directory, clearing their worktree association.
+  `FORMER WORKTREE` and `MISSING` are independent: recreating the directory clears
+  only `MISSING`. Busy agent turns or shell commands prevent removal.
+  Deleting a session removes nothing from disk.
 - **Live transcript** — streamed agent output, collapsible tool-use cards,
   inline approval prompts (Allow / Deny), and multiple-choice question prompts
   (Claude's AskUserQuestion) over a WebSocket that auto-reconnects.
@@ -277,7 +280,11 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
 | `Archive.java`             | live/archived split of the two list responses, and the archive's ordering (pure, unit tested) |
-| `Api.java`                 | OkHttp REST client for `/projects` + `/worktrees` + `/sessions` |
+| `Api.java`                 | OkHttp REST transport; reports successful responses without owning cache policy |
+| `CatalogRepository.java`   | explicit project/session/chat/worktree refresh operations, existence ordering/retry, cache freshness and invalidation |
+| `CatalogSnapshot.java` / `CatalogProgress.java` | completed refresh data and early catalog delivery |
+| `ResourceCache.java`       | bounded, server/auth-scoped raw-response cache; readers decode independent models |
+| `RefreshController.java`   | shared in-flight guard, queued action refresh and lifecycle callback cancellation |
 | `Session.java` / `Project.java` / `Worktree.java` | session, project and worktree models |
 | `Agent.java`               | the server's agent list: labels, the default to preselect, the older-server fallback (pure parts unit tested) |
 | `Json.java`                | id decoding — server ids are JSON numbers, held as opaque strings (pure, unit tested) |
@@ -404,10 +411,9 @@ usage starts — so it is re-read rather than cached and counted down locally. A
 **404 means an older server**, and the panel says so instead of retrying.
 
 `GET /projects` returns
-`[{ id, path, name, exists, is_git_repo, archived_at, session_count,
+`[{ id, path, name, is_git_repo, archived_at, session_count,
 archived_session_count, last_active_at }]`, where
-`last_active_at` is `null` for a project with no sessions yet, `exists` reports
-whether the directory is still on the server's disk, and `is_git_repo` is a hint
+`last_active_at` is `null` for a project with no sessions yet, and `is_git_repo` is a hint
 for whether to offer the worktree toggle. There are no nested project routes:
 `GET /sessions` carries `project_id` on every row, so the client filters
 locally — on the id, not the path, because a worktree session's `working_dir`
@@ -439,14 +445,37 @@ reported as left in place.
 
 **Worktrees.** A worktree is its own resource, not something a session owns.
 `GET /worktrees?project_path=…` returns
-`[{ id, project_id, path, branch, created_at, session_count, exists }]`, newest
+`[{ id, project_id, path, branch, created_at, session_count }]`, newest
 first, where `branch` is the branch the worktree was *created on* (null for one
 carried over by the server's migration, and never live state — an agent can
 switch branches in it), `session_count` counts attached sessions only and may be
-`0` without anything being wrong, and `exists` is a `stat` of the directory at
-request time. A **404 means an
-older server**, one that only made worktrees as part of a session; the app then
-hides the picker and the worktree screen entirely.
+`0` without anything being wrong. Session and worktree screens request only
+that project's worktrees, including worktrees with no sessions.
+
+`GET /directory-existence` returns an absolute-path-to-boolean object for all
+projects, worktrees and effective session directories, including archived and
+former-worktree sessions. Each screen fetches only the catalogs it uses, in
+parallel, then requests existence. Session cards render as soon as `/sessions`
+returns, without waiting for worktrees or existence. Absent keys mean unknown,
+not missing; a concurrent catalog change triggers one bounded retry.
+
+Fetched catalogs and existence are cached in memory by server and authentication
+identity and reused immediately on navigation while fresh data loads. Mutable
+models are decoded separately for each reader. Agents are reused for up to one
+minute. Catalog mutations invalidate affected cached catalogs; directory creation
+or removal also invalidates existence. Foreground project/session/worktree/chat
+polling refreshes current data every three seconds; session polling includes
+project-scoped worktrees. Project/search screens never fetch worktrees, and chat
+fetches projects only when its project path is unknown. Worktree listing fetches
+sessions only for deletion confirmation and post-deletion refresh.
+There is no new WebSocket event.
+
+`CatalogRepository` owns the screen-specific operations and cache policy;
+`Api` remains the HTTP transport. `RefreshController` owns each activity's
+in-flight refresh and one queued action refresh. Pausing an activity suppresses
+late publications and further existence/retry requests; an already-started HTTP
+request may still finish and warm the cache. Pre-mutation responses cannot refill
+invalidated cache entries.
 
 `POST /worktrees` body: `{ project_path, path, branch }` — runs
 `git worktree add -b <branch> <path>`, always cutting a **new** branch off the
@@ -461,12 +490,14 @@ Creating one **in an archived project is a 409**, so the app withholds the
 control there rather than let it fail.
 
 `DELETE /worktrees/{id}` removes the directory and the row, **never** with
-`--force`. Three 409s leave both intact: attached sessions, live detached
-sessions still using its path, or a dirty tree — and git counts untracked files
-as dirty, so the last is common. The server names blocking sessions. Before the
-request, the app also checks the complete session listing for archived detached
-sessions whose preserved `working_dir` equals the worktree path and warns that
-removal prevents restoring them until the exact directory is recreated. For a
+`--force`. A 409 leaves both intact when a directory-dependent session is busy
+(active agent turn or shell command), or Git refuses safe removal. Idle live
+sessions and archived sessions do not block removal. Attached sessions retain
+the original `working_dir` and lose their worktree association; already-detached
+sessions are unchanged. History, identity and archive state are preserved.
+Before the request, the app checks attached sessions and all sessions using the
+same absolute path, warning that a missing directory prevents running or
+unarchiving until that path is recreated. For a
 worktree whose directory is already gone the call succeeds and tidies the row
 away, which is offered as "clean up" rather than delete.
 

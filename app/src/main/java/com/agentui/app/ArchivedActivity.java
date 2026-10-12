@@ -38,6 +38,7 @@ public class ArchivedActivity extends Activity {
     static final String EXTRA_PROJECT_NAME = "project_name";
 
     private Api api;
+    private CatalogRepository catalogs;
     private Prefs prefs;
     private String filterProjectId;
     private String filterProjectName;
@@ -51,6 +52,7 @@ public class ArchivedActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
+        catalogs = new CatalogRepository(api);
         prefs = api.prefs();
         filterProjectId = getIntent().getStringExtra(EXTRA_PROJECT_ID);
         filterProjectName = getIntent().getStringExtra(EXTRA_PROJECT_NAME);
@@ -139,7 +141,7 @@ public class ArchivedActivity extends Activity {
     }
 
     private void loadAgents(List<Project> projects, List<Session> sessions) {
-        api.listAgents(new Api.Cb<List<Agent>>() {
+        catalogs.agents(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
                 agents.clear();
                 agents.addAll(list);

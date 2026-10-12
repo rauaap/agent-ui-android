@@ -18,7 +18,7 @@ import java.util.List;
 public class ArchiveTest {
 
     private static Project project(String id, String path, String archivedAt) {
-        return new Project(id, path, path, 0, 0, "", archivedAt, true, false);
+        return new Project(id, path, path, 0, 0, "", archivedAt, false);
     }
 
     private static Session session(String id, String projectId, String workingDir,
@@ -129,7 +129,7 @@ public class ArchiveTest {
     @Test
     public void detachedWorktreeStateUsesProjectIdAndNormalizedServerPaths() {
         Worktree worktree = new Worktree("w1", "p1", "/projects/app-fix", "fix",
-                0, true, "");
+                0, "");
         Session detached = session("s1", "p1", "/projects/app-fix", "",
                 "2026-08-26T11:02:00Z");
         Session projectDirectory = session("s2", "p1", "/projects/app", "",

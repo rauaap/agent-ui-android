@@ -23,21 +23,23 @@ import static com.agentui.app.Widgets.lp;
 /** Full-screen project/session search, using the same cards as the main lists. */
 public class SearchActivity extends Activity {
     private Api api;
+    private CatalogRepository catalogs;
+    private final RefreshController refresh = new RefreshController();
+    private final RefreshController agentRefresh = new RefreshController();
     private EditText query;
     private LinearLayout results;
     private ScrollView scroll;
     private List<Project> projects = Collections.emptyList();
     private List<Session> sessions = Collections.emptyList();
     private List<Agent> agents = Collections.emptyList();
-    private List<Worktree> worktrees = Collections.emptyList();
     private boolean loading;
     private String error;
-    private int loadGeneration;
     private final ProjectSearch.Expansion expansion = new ProjectSearch.Expansion();
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         api = new Api(this);
+        catalogs = new CatalogRepository(api);
         setContentView(buildRoot());
         if (savedInstanceState != null) {
             expansion.restore(savedInstanceState.getStringArrayList("collapsed_projects"));
@@ -57,7 +59,8 @@ public class SearchActivity extends Activity {
     }
 
     @Override protected void onPause() {
-        loadGeneration++;
+        refresh.cancel();
+        agentRefresh.cancel();
         super.onPause();
     }
 
@@ -114,56 +117,51 @@ public class SearchActivity extends Activity {
         return root;
     }
 
-    private boolean current(int generation) {
-        return generation == loadGeneration && !isFinishing() && !isDestroyed();
-    }
+    private DirectorySnapshot existence = DirectorySnapshot.unknown();
 
     private void load() {
-        int generation = ++loadGeneration;
-        loading = true;
+        refresh.cancel();
+        agentRefresh.cancel();
+        existence = catalogs.cachedExistence();
+        List<Project> cachedProjects = catalogs.cachedProjects();
+        List<Session> cachedSessions = catalogs.cachedSessions();
+        if (cachedProjects != null) projects = cachedProjects;
+        if (cachedSessions != null) sessions = cachedSessions;
+        boolean[] loaded = {cachedProjects != null, cachedSessions != null};
+        loading = !loaded[0] || !loaded[1];
         error = null;
         agents = Collections.emptyList();
-        worktrees = Collections.emptyList();
         render();
-        api.listWorktrees(null, new Api.Cb<List<Worktree>>() {
-            @Override public void onResult(List<Worktree> list) {
-                if (!current(generation)) return;
-                worktrees = list;
-                render();
+        refresh.start(false, run -> catalogs.projects(run.progress(new CatalogProgress() {
+            @Override public void projects(List<Project> list) {
+                projects = list; loaded[0] = true;
+                loading = !loaded[1]; render();
             }
-            @Override public void onError(String message) { /* Unknown is not missing. */ }
-        });
-        api.listProjects(new Api.StatusCb<List<Project>>() {
-            @Override public void onResult(List<Project> list) {
-                if (!current(generation)) return;
-                api.listSessions(new Api.Cb<List<Session>>() {
-                    @Override public void onResult(List<Session> listSessions) {
-                        if (!current(generation)) return;
-                        projects = list;
-                        sessions = listSessions;
-                        loading = false;
-                        render();
-                    }
-                    @Override public void onError(String message) { fail(message); }
-                });
+            @Override public void sessions(List<Session> list) {
+                sessions = list; loaded[1] = true;
+                loading = !loaded[0]; render();
             }
-            private void fail(String message) {
-                if (!current(generation)) return;
+        }), run.finish(new Api.Cb<CatalogSnapshot>() {
+            @Override public void onResult(CatalogSnapshot snapshot) {
+                projects = snapshot.projects;
+                sessions = snapshot.sessions;
+                existence = snapshot.existence;
                 loading = false;
-                error = "Unable to search: " + message;
                 render();
             }
-            @Override public void onError(String message) { fail(message); }
-            @Override public void onHttpError(int code, String message) { fail(message); }
-        });
-        api.listAgents(new Api.Cb<List<Agent>>() {
+            @Override public void onError(String message) {
+                loading = false;
+                if (!loaded[0] || !loaded[1]) error = "Unable to search: " + message;
+                render();
+            }
+        })));
+        agentRefresh.start(false, run -> catalogs.agents(run.finish(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
-                if (!current(generation)) return;
                 agents = list;
                 render();
             }
             @Override public void onError(String message) { /* Fall back to raw ids. */ }
-        });
+        })));
     }
 
     private void render() {
@@ -179,7 +177,7 @@ public class SearchActivity extends Activity {
         for (ProjectSearch.Group group : groups) {
             Project p = group.project;
             boolean expanded = expansion.isExpanded(p);
-            results.addView(ProjectCards.build(this, p, sessions,
+            results.addView(ProjectCards.build(this, p, sessions, existence,
                     () -> openProject(p), expanded ? R.drawable.ic_collapse : R.drawable.ic_expand,
                     (expanded ? "Collapse " : "Expand ") + p.name,
                     () -> {
@@ -190,7 +188,7 @@ public class SearchActivity extends Activity {
             LinearLayout children = Widgets.column(this);
             children.setPadding(Theme.dp(this, 16), 0, 0, 0);
             for (Session session : group.sessions) {
-                children.addView(SessionCards.build(this, session, p.path, p.isArchived(), agents, worktrees,
+                children.addView(SessionCards.build(this, session, p.path, p.isArchived(), agents, existence,
                         () -> startActivity(SessionActivity.intent(this, session, p.path)), null));
             }
             results.addView(children);
@@ -198,7 +196,7 @@ public class SearchActivity extends Activity {
     }
 
     private void openProject(Project p) {
-        if (!p.exists) {
+        if (existence.missing(p.path)) {
             confirmDelete(p, true);
             return;
         }

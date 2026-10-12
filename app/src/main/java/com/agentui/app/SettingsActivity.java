@@ -371,7 +371,7 @@ public class SettingsActivity extends Activity {
     /** Fill the chooser from the configured server; "Server default" needs no answer. */
     private void loadAgents() {
         if (!prefs.isConfigured()) return;
-        new Api(this).listAgents(new Api.Cb<List<Agent>>() {
+        new CatalogRepository(new Api(this)).agents(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
                 agents.clear();
                 agents.addAll(list);

@@ -10,6 +10,7 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -108,6 +109,15 @@ final class Api {
         enqueue(new Request.Builder().url(url).get().build(), cb, JSONObject::new);
     }
 
+    String serverIdentity() { return prefs.httpBase() + "\n" + prefs.token(); }
+
+    /** Optional response observer; transport does not know which resources are cached. */
+    interface ResponseObserver {
+        Consumer<String> begin(String identity, String method, String resource);
+    }
+    private static volatile ResponseObserver responseObserver = (identity, method, resource) -> body -> {};
+    static void setResponseObserver(ResponseObserver observer) { responseObserver = observer; }
+
     /**
      * The agents this server can run, in registration order, each with the
      * model catalog its harness offered at server startup. Server-wide rather
@@ -190,6 +200,11 @@ final class Api {
     void deleteSharedAssetRoot(String name, Cb<Void> cb) {
         Request req = new Request.Builder().url(SharedAssetRoot.endpoint(prefs.httpBase(), name)).delete().build();
         enqueue(req, cb, body -> null);
+    }
+
+    void directoryExistence(Cb<DirectorySnapshot> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/directory-existence").get().build();
+        enqueue(req, cb, body -> DirectorySnapshot.from(new JSONObject(body)));
     }
 
     void listProjects(Cb<List<Project>> cb) {
@@ -295,9 +310,9 @@ final class Api {
             post(() -> cb.onError("Bad server address"));
             return;
         }
-        HttpUrl.Builder urlBuilder = base.newBuilder();
-        if (projectPath != null) urlBuilder.addQueryParameter("project_path", projectPath);
-        HttpUrl url = urlBuilder.build();
+        HttpUrl.Builder builder = base.newBuilder();
+        if (projectPath != null) builder.addQueryParameter("project_path", projectPath);
+        HttpUrl url = builder.build();
         Request req = new Request.Builder().url(url).get().build();
         enqueue(req, cb, body -> {
             List<Worktree> out = new ArrayList<>();
@@ -335,7 +350,7 @@ final class Api {
      * Removes the directory ({@code git worktree remove}, never
      * {@code --force}) and the row.
      *
-     * <p>Either 409 — sessions still attached, or a dirty tree — leaves both in
+     * <p>Either 409 — a busy directory-dependent session, or Git unsafe removal — leaves both in
      * place, so a caller must re-render from the state it had rather than
      * dropping the worktree optimistically. {@link StatusCb} separates those
      * from a real failure.
@@ -516,6 +531,10 @@ final class Api {
     @SuppressWarnings("unchecked") // cb's type parameter is the caller's own T
     private <T> void enqueue(Request req, Cb<T> cb, Parser<T> parser) {
         final long started = SessionState.snapshot();
+        final String identity = serverIdentity();
+        String query = req.url().encodedQuery();
+        final Consumer<String> observed = responseObserver.begin(identity, req.method(),
+                req.url().encodedPath() + (query == null ? "" : "?" + query));
         client.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {
                 post(() -> cb.onError(friendly(e)));
@@ -535,6 +554,11 @@ final class Api {
                     }
                     final T value = parser.parse(body);
                     post(() -> {
+                        if (!identity.equals(serverIdentity())) {
+                            cb.onError("Server settings changed");
+                            return;
+                        }
+                        observed.accept(body);
                         if (value instanceof Session) {
                             Session s = (Session) value;
                             SessionState.get(Api.this, s.id).confirmed(s, started);
