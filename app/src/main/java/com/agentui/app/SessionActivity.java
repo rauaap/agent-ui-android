@@ -169,7 +169,7 @@ public class SessionActivity extends Activity {
     private Boolean renderedArchiveState; // null until the initial composer render
     // Accepted inputs still waiting for a turn, shown above the composer and
     // kept out of the transcript until the server ships them.
-    private final MessageQueue messageQueue = new MessageQueue();
+    private MessageQueue messageQueue = new MessageQueue();
     private View pendingPanel;
     private LinearLayout pendingList;
 
@@ -214,6 +214,11 @@ public class SessionActivity extends Activity {
     private boolean firstConnect = true;
     private boolean awaitingReplay;   // true while buffering a reconnect's replay
     private LinearLayout replayBuffer; // detached build target during a reconnect
+    private final ScrollbackHistory scrollback = new ScrollbackHistory();
+    private final java.util.Map<Long, View> eventRows = new java.util.LinkedHashMap<>();
+    private long renderingEventId;
+    private boolean rebuildingHistory;
+    private boolean historyFailedAtTop;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -492,6 +497,10 @@ public class SessionActivity extends Activity {
         transcript = newTranscript();
         scroll.addView(transcript);
         scroll.setOnPositionChanged(this::updateScrollButton);
+        scroll.setOnTopPull(() -> {
+            historyFailedAtTop = false;
+            loadOlderHistory();
+        });
         scrollArea.addView(scroll);
 
         // Floating down arrow, shown only when the transcript can scroll further down.
@@ -1343,6 +1352,10 @@ public class SessionActivity extends Activity {
             activity.setVisibility(View.GONE);
         }
 
+        retirePendingCards(s);
+    }
+
+    private void retirePendingCards(String s) {
         // Retire a still-open approval card if the turn ended.
         if (!"awaiting_approval".equals(s) && pendingApprovalCard != null) {
             finalizeApproval(pendingApprovalCard, null, null);
@@ -1379,6 +1392,9 @@ public class SessionActivity extends Activity {
 
         // Every connection begins with a complete transcript replay. Rebuild
         // history from that authoritative stream just as the transcript is.
+        scrollback.reset();
+        eventRows.clear();
+        historyFailedAtTop = false;
         messageHistory.clear();
         pendingHistoryEchoes.clear();
         // Likewise the queue: the replay re-accepts and re-ships, then the
@@ -1487,7 +1503,18 @@ public class SessionActivity extends Activity {
         } catch (Exception e) {
             return;
         }
+        if (!scrollback.accept(msg)) return;
+        renderMessage(msg);
+    }
+
+    private void renderMessage(JSONObject msg) {
         String type = msg.optString("type", "");
+        renderingEventId = msg.optLong("event_id", 0);
+        // History must not roll back current metadata or replay a queue snapshot.
+        if (rebuildingHistory && !isTranscriptEvent(type)) {
+            if ("status".equals(type)) retirePendingCards(msg.optString("status", "idle"));
+            return;
+        }
 
         // Once any data has arrived, future (re)connects buffer their replay
         // off-screen rather than rendering into the live transcript.
@@ -1498,6 +1525,7 @@ public class SessionActivity extends Activity {
                 // The server sends this right after the replay finishes, so it's
                 // the cue to swap a buffered reconnect in for the old scrollback.
                 if (awaitingReplay) commitReplay();
+                scrollback.replayComplete = true;
                 applyStatus(msg.optString("status", "idle"));
                 break;
             case "archived":
@@ -1637,7 +1665,7 @@ public class SessionActivity extends Activity {
      * screen with the transcript, so the old list stays up until the swap.
      */
     private void renderPending() {
-        if (pendingList == null || awaitingReplay) return;
+        if (pendingList == null || awaitingReplay || rebuildingHistory) return;
         pendingList.removeAllViews();
         List<MessageQueue.Message> messages = messageQueue.pending();
         for (MessageQueue.Message m : messages) {
@@ -1680,6 +1708,7 @@ public class SessionActivity extends Activity {
 
     /** Add a replay/live entry unless it is the echo of our own successful send. */
     private void acceptHistoryEcho(String entry) {
+        if (rebuildingHistory) return;
         if (entry.equals(pendingHistoryEchoes.peekFirst())) pendingHistoryEchoes.removeFirst();
         else messageHistory.add(entry);
     }
@@ -1696,6 +1725,11 @@ public class SessionActivity extends Activity {
 
     private void append(View v) {
         transcript.addView(v, rowParams());
+        rememberRow(v);
+    }
+
+    private void rememberRow(View v) {
+        if (renderingEventId > 0) eventRows.put(renderingEventId, v);
     }
 
     /**
@@ -1705,7 +1739,10 @@ public class SessionActivity extends Activity {
      */
     private void place(View v, int index) {
         if (index < 0) append(v);
-        else transcript.addView(v, index, rowParams());
+        else {
+            transcript.addView(v, index, rowParams());
+            rememberRow(v);
+        }
     }
 
 
@@ -1713,6 +1750,116 @@ public class SessionActivity extends Activity {
     private void updateScrollButton() {
         if (scrollDownBtn == null) return;
         scrollDownBtn.setVisibility(scroll.canScrollVertically(1) ? View.VISIBLE : View.GONE);
+        if (scroll.getScrollY() > 0) historyFailedAtTop = false;
+        if (scroll.getScrollY() == 0 && scroll.canScrollVertically(1)) loadOlderHistory();
+    }
+
+    private static boolean isTranscriptEvent(String type) {
+        switch (type) {
+            case "input": case "inputs_shipped": case "output": case "tool_use":
+            case "approval_request": case "approval_response": case "question":
+            case "question_response": case "bash_input": case "bash_output":
+            case "done": case "error": return true;
+            default: return false;
+        }
+    }
+
+    private void loadOlderHistory() {
+        if (!active || rebuildingHistory || historyFailedAtTop || !scrollback.canLoad()) return;
+        scrollback.loading = true;
+        final int generation = scrollback.generation;
+        final String requestedSession = sessionId;
+        api.getScrollback(sessionId, scrollback.oldest, new Api.Cb<JSONObject>() {
+            private boolean current() {
+                return active && generation == scrollback.generation
+                        && requestedSession.equals(sessionId);
+            }
+            @Override public void onResult(JSONObject page) {
+                if (!current()) return;
+                try {
+                    if (scrollback.prepend(page)) {
+                        rebuildHistory();
+                        // Do not start another request until the anchor is restored.
+                        scroll.afterNextLayout(() -> {
+                            if (!current()) return;
+                            scrollback.loading = false;
+                            updateScrollButton();
+                        });
+                    } else {
+                        scrollback.loading = false;
+                    }
+                } catch (Exception e) {
+                    onError("Invalid history page");
+                }
+            }
+            @Override public void onError(String message) {
+                if (!current()) return;
+                scrollback.loading = false;
+                historyFailedAtTop = true;
+                android.widget.Toast.makeText(SessionActivity.this,
+                        "Could not load older history: " + message,
+                        android.widget.Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    /** Re-render chronologically so fragments and cross-page responses join correctly. */
+    private void rebuildHistory() {
+        View anchor = null;
+        for (int i = 0; i < transcript.getChildCount(); i++) {
+            View row = transcript.getChildAt(i);
+            if (row.getBottom() > scroll.getScrollY()) { anchor = row; break; }
+        }
+        long anchorId = 0;
+        for (java.util.Map.Entry<Long, View> entry : eventRows.entrySet()) {
+            if (entry.getValue() == anchor) anchorId = entry.getKey();
+        }
+        int offset = anchor == null ? 0 : anchor.getBottom() - scroll.getScrollY();
+        int transcriptOffset = transcript.getBottom() - scroll.getScrollY();
+        List<Long> expandedTools = new ArrayList<>();
+        for (java.util.Map.Entry<Long, View> entry : eventRows.entrySet()) {
+            View row = entry.getValue();
+            if (row.getTag() instanceof ToolCards.Tag && row instanceof LinearLayout) {
+                LinearLayout card = (LinearLayout) row;
+                if (card.getChildAt(card.getChildCount() - 1).getVisibility() == View.VISIBLE) {
+                    expandedTools.add(entry.getKey());
+                }
+            }
+        }
+        MessageQueue liveQueue = messageQueue;
+        messageQueue = new MessageQueue();
+        rebuildingHistory = true;
+        transcript = newTranscript();
+        eventRows.clear();
+        directoryViews.clear();
+        agentLabelViews.clear();
+        agentBubble = null;
+        agentRaw = null;
+        pendingApprovalCard = null;
+        pendingApprovalId = null;
+        pendingQuestionCard = null;
+        pendingQuestionId = null;
+        pendingBashCard = null;
+        pendingBashCommand = null;
+        try {
+            for (JSONObject event : scrollback.events) renderMessage(event);
+        } finally {
+            messageQueue = liveQueue;
+            rebuildingHistory = false;
+        }
+        for (Long id : expandedTools) {
+            View row = eventRows.get(id);
+            if (row != null && row.getTag() instanceof ToolCards.Tag) {
+                ((LinearLayout) row).getChildAt(0).performClick();
+            }
+        }
+        View replacement = eventRows.get(anchorId);
+        scroll.removeAllViews();
+        scroll.addView(transcript);
+        if (replacement != null) scroll.preserveHistoryAnchor(replacement, offset);
+        else scroll.preserveHistoryAnchor(transcript, transcriptOffset);
+        retirePendingCards(status);
+        renderPending();
     }
 
     private void addUserMessage(String text, List<ImageAttachment> images) {
@@ -1871,6 +2018,7 @@ public class SessionActivity extends Activity {
             if (agentRaw == null) agentRaw = new StringBuilder();
             agentRaw.append(text);
             Markdown.renderInto(agentBubble, agentRaw.toString());
+            rememberRow((View) agentBubble.getParent());
             return;
         }
         // The raw markdown is kept verbatim: the bubble shows the rendered form,
@@ -2041,8 +2189,12 @@ public class SessionActivity extends Activity {
                 // Rebuilt where it already sits, rather than appended: a command
                 // that finishes mid-turn must not land below — or interrupt —
                 // the agent message still streaming underneath it.
+                View oldCard = transcript.getChildAt(index);
+                View newCard = bashCard(command, result);
                 transcript.removeViewAt(index);
-                transcript.addView(bashCard(command, result), index, rowParams());
+                transcript.addView(newCard, index, rowParams());
+                eventRows.replaceAll((id, row) -> row == oldCard ? newCard : row);
+                rememberRow(newCard);
                 return;
             }
         }
@@ -2190,9 +2342,13 @@ public class SessionActivity extends Activity {
         // appended.
         final int toolIndex = ToolCards.indexOf(
                 i -> transcript.getChildAt(i).getTag(), transcript.getChildCount(), callId);
+        View replacedTool = toolIndex >= 0 ? transcript.getChildAt(toolIndex) : null;
         if (toolIndex >= 0) transcript.removeViewAt(toolIndex);
 
         LinearLayout card = Widgets.column(this);
+        if (replacedTool != null) {
+            eventRows.replaceAll((eventId, row) -> row == replacedTool ? card : row);
+        }
         if (auto) {
             card.setBackground(Theme.rounded(this, Theme.PANEL, 14, Theme.LINE, 1));
         } else {
@@ -2701,7 +2857,7 @@ public class SessionActivity extends Activity {
 
         // The status may already have flipped to awaiting_approval; correct the
         // activity wording to match a question rather than an approval.
-        if ("awaiting_approval".equals(status) && pendingApprovalCard == null) {
+        if (!rebuildingHistory && "awaiting_approval".equals(status) && pendingApprovalCard == null) {
             activity.setVisibility(View.VISIBLE);
             activity.setText("● Waiting for your answer");
             activity.setTextColor(Theme.AWAITING);

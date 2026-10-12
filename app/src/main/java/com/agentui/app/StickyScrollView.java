@@ -3,6 +3,8 @@ package com.agentui.app;
 import android.content.Context;
 import android.graphics.Rect;
 import android.view.View;
+import android.view.MotionEvent;
+import android.view.ViewConfiguration;
 import android.widget.ScrollView;
 
 /**
@@ -22,6 +24,11 @@ final class StickyScrollView extends ScrollView {
     private boolean inLayout;
     private int lastHeight;
     private Runnable onPositionChanged;
+    private View historyAnchor;
+    private int historyAnchorBottomOffset;
+    private Runnable onTopPull;
+    private float touchStartY;
+    private Runnable afterNextLayout;
 
     StickyScrollView(Context ctx) {
         super(ctx);
@@ -30,6 +37,20 @@ final class StickyScrollView extends ScrollView {
     /** Called after every scroll or layout, e.g. to show or hide a jump button. */
     void setOnPositionChanged(Runnable r) {
         onPositionChanged = r;
+    }
+
+    void setOnTopPull(Runnable r) {
+        onTopPull = r;
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) touchStartY = event.getY();
+        boolean result = super.dispatchTouchEvent(event);
+        if (event.getActionMasked() == MotionEvent.ACTION_UP && getScrollY() == 0
+                && event.getY() - touchStartY > ViewConfiguration.get(getContext()).getScaledTouchSlop()
+                && onTopPull != null) onTopPull.run();
+        return result;
     }
 
     /** Stick to the bottom and jump there. */
@@ -47,6 +68,19 @@ final class StickyScrollView extends ScrollView {
         stuck = false;
     }
 
+    void afterNextLayout(Runnable r) {
+        afterNextLayout = r;
+        requestLayout();
+    }
+
+    /** Preserve a visible row's bottom edge through a chronological history rebuild. */
+    void preserveHistoryAnchor(View row, int bottomOffset) {
+        historyAnchor = row;
+        historyAnchorBottomOffset = bottomOffset;
+        stuck = false;
+        requestLayout();
+    }
+
     private int scrollRange() {
         if (getChildCount() == 0) return 0;
         int viewport = getHeight() - getPaddingTop() - getPaddingBottom();
@@ -60,7 +94,10 @@ final class StickyScrollView extends ScrollView {
         inLayout = true;
         super.onLayout(changed, l, t, r, b);
         int height = getHeight();
-        if (stuck) {
+        if (historyAnchor != null) {
+            scrollTo(0, historyAnchor.getBottom() - historyAnchorBottomOffset);
+            historyAnchor = null;
+        } else if (stuck) {
             scrollTo(0, scrollRange());
         } else if (oldHeight != 0 && oldHeight != height) {
             // Anchor the bottom edge: the keyboard and footer take height off
@@ -73,6 +110,9 @@ final class StickyScrollView extends ScrollView {
         // reader, puts them at the bottom, so follow from there.
         if (!canScrollVertically(1)) stuck = true;
         if (onPositionChanged != null) onPositionChanged.run();
+        Runnable complete = afterNextLayout;
+        afterNextLayout = null;
+        if (complete != null) complete.run();
     }
 
     @Override

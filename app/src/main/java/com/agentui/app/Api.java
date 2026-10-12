@@ -100,6 +100,14 @@ final class Api {
     OkHttpClient http() { return client; }
     Prefs prefs() { return prefs; }
 
+    /** Fetch the nearest 200 older persisted events, in chronological order. */
+    void getScrollback(String sessionId, long before, Cb<JSONObject> cb) {
+        HttpUrl url = HttpUrl.get(prefs.httpBase() + "/sessions/" + sessionId + "/scrollback")
+                .newBuilder().addQueryParameter("before", Long.toString(before))
+                .addQueryParameter("limit", "200").build();
+        enqueue(new Request.Builder().url(url).get().build(), cb, JSONObject::new);
+    }
+
     /**
      * The agents this server can run, in registration order, each with the
      * model catalog its harness offered at server startup. Server-wide rather
