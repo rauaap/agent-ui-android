@@ -42,7 +42,6 @@ import okhttp3.ResponseBody;
  *   POST   /sessions
  *   PATCH  /sessions/{id}
  *   DELETE /sessions/{id}
- *   POST   /sessions/{id}/detach-worktree
  *   POST   /sessions/{id}/stop
  */
 final class Api {
@@ -77,17 +76,6 @@ final class Api {
         }
     }
 
-    /** What {@code PATCH /projects} reports about the cascade it just ran. */
-    static final class ProjectArchive {
-        final Project project;
-        /** Sessions the cascade archived, or restored. Legitimately 0. */
-        final int sessionsAffected;
-
-        ProjectArchive(Project project, int sessionsAffected) {
-            this.project = project;
-            this.sessionsAffected = sessionsAffected;
-        }
-    }
 
     private final OkHttpClient client;
     private final Prefs prefs;
@@ -153,7 +141,7 @@ final class Api {
         enqueue(req, cb, body -> SandboxPath.from(new JSONObject(body).getJSONArray("sandbox_paths")));
     }
 
-    /** Replaces only this scope's list; never sends inherited entries or archive flags. */
+    /** Replaces only this scope's list; never sends inherited entries or unrelated settings. */
     void saveSandboxPaths(String projectPath, List<SandboxPath> paths, Cb<List<SandboxPath>> cb) {
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + (projectPath == null ? "/sandbox-paths" : "/projects"))
@@ -234,31 +222,6 @@ final class Api {
                 .post(RequestBody.create(payload.toString(), JSON))
                 .build();
         enqueue(req, cb, body -> Project.from(new JSONObject(body)));
-    }
-
-    /**
-     * Archives or unarchives a project. Archiving cascades to every session in
-     * it; unarchiving restores exactly the ones that cascade took, so a session
-     * archived by hand beforehand stays archived — which is why the count comes
-     * back from the server rather than being guessed from the project row.
-     *
-     * <p>A 409 means at least one session is busy and <em>nothing was written</em>;
-     * its {@code detail} names them.
-     */
-    void setProjectArchived(String path, boolean archived, Cb<ProjectArchive> cb) {
-        JSONObject payload = new JSONObject();
-        try {
-            payload.put("path", path);
-            payload.put("archived", archived);
-        } catch (Exception ignored) {}
-        Request req = new Request.Builder()
-                .url(prefs.httpBase() + "/projects")
-                .patch(RequestBody.create(payload.toString(), JSON))
-                .build();
-        enqueue(req, cb, body -> {
-            JSONObject o = new JSONObject(body);
-            return new ProjectArchive(Project.from(o), o.optInt("sessions_affected", 0));
-        });
     }
 
     /**
@@ -428,42 +391,6 @@ final class Api {
         Request req = new Request.Builder()
                 .url(prefs.httpBase() + "/sessions/" + id)
                 .patch(RequestBody.create(payload.toString(), JSON))
-                .build();
-        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
-    }
-
-    /**
-     * Archives or unarchives one session. Unarchiving also unarchives its
-     * project if that was archived — a live session under an archived project
-     * would have nowhere to show — so refresh the project list afterwards.
-     *
-     * <p>While archiving, a 409 means the session is busy. {@code status} does
-     * not settle that on its own: bash mode is outside the turn state machine.
-     * While unarchiving, a 409 means its effective working directory is absent
-     * or is not a directory.
-     */
-    void setSessionArchived(String id, boolean archived, Cb<Session> cb) {
-        JSONObject payload = new JSONObject();
-        try {
-            payload.put("archived", archived);
-        } catch (Exception ignored) {}
-        Request req = new Request.Builder()
-                .url(prefs.httpBase() + "/sessions/" + id)
-                .patch(RequestBody.create(payload.toString(), JSON))
-                .build();
-        enqueue(req, cb, body -> Session.from(new JSONObject(body)));
-    }
-
-    /**
-     * Releases an archived session's worktree reference while preserving its
-     * effective working directory. The filesystem is not touched. A completed
-     * detach is idempotent; a session that always used the project directory,
-     * or one that is currently live, returns 409.
-     */
-    void detachSessionWorktree(String id, Cb<Session> cb) {
-        Request req = new Request.Builder()
-                .url(prefs.httpBase() + "/sessions/" + id + "/detach-worktree")
-                .post(RequestBody.create(new byte[0], null))
                 .build();
         enqueue(req, cb, body -> Session.from(new JSONObject(body)));
     }

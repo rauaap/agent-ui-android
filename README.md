@@ -141,30 +141,11 @@ Device smoke checks before release:
   preference is remembered per session **per server address**: ids are only unique
   within one backend, so pointing the app elsewhere starts from a clean set
   rather than inheriting whatever wore the same id there.
-- **Archive** — file a session or a whole project away without deleting it.
-  The archive lives **server-side** (`archived_at`, a timestamp rather than a
-  flag), so it is the same on every device and a change made elsewhere arrives
-  over the session's WebSocket. Archive a session from its ⚙ settings, or a
-  project from the project's ⚙ settings — the latter is one call that
-  **cascades** to every session in it, and unarchiving restores exactly the ones
-  that cascade took, so a session you archived by hand beforehand stays
-  archived. Archived work is **read-only, not sealed**: the transcript still
-  opens and replays, and renaming, the auto-approve toggles and deleting all
-  still work — only new prompts and shell commands are refused, so the composer
-  is replaced by a notice with an Unarchive button. An archived project offers
-  no **+ New**. Archiving is refused while a session is busy, and a busy session
-  makes a whole project archive fail without writing anything. Everything
-  archived is under **Settings ▸ Archived**, newest filing first, where a row
-  opens what it points at and **Restore** puts it back. The main lists still
-  admit to what they hide ("2 sessions · 1 archived"). Two things archiving is
-  deliberately not: a shield against deletion — deleting a project still takes
-  its archived sessions with it, and says so — and a cleanup. Worktrees are a
-  project's, hold real uncommitted work, and are left exactly where they are;
-  an archived project's still list and can still be removed, but no new one can
-  be cut in it. An archived session may later **detach** from its worktree in
-  Session settings. This releases only the database reference and preserves the
-  same cwd as a `FORMER WORKTREE`; deleting that worktree later can make the
-  session impossible to restore until the exact directory is recreated.
+- **Retained sessions** — all projects and sessions appear in ordinary lists.
+  Removing a worktree preserves attached sessions and their exact working
+  directory as a `FORMER WORKTREE`. Missing paths are marked independently as
+  `MISSING`; history and settings remain available, while attempts to run in a
+  missing directory fail through the ordinary operation error path.
 - **Subscription usage** — the **U** button on the project list opens a panel of
   meters: how much of each plan's five-hour and weekly quota is already spent,
   what it resets to zero at, and how long that is away. The two rows are
@@ -264,22 +245,20 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WorktreeListActivity.java` | one project's worktrees: list / create / remove |
 | `WorktreeForm.java`        | the create-worktree dialog, shared by the picker and that list |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
-| `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, reasoning level, auto-approve toggles, archive |
-| `ProjectSettingsActivity.java` | per-project settings: sandbox paths, shared assets, archive / unarchive |
-| `SettingsActivity.java`    | server address + projects directory form (persisted) + the way in to Archived |
+| `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, reasoning level, auto-approve toggles |
+| `ProjectSettingsActivity.java` | per-project settings: sandbox paths, network, shared assets |
+| `SettingsActivity.java`    | server address + projects directory form (persisted) |
 | `SandboxPathsActivity.java` | shared server/project sandbox-path editor with inheritance and atomic saves |
 | `SandboxNetworkActivity.java` | shared server/project IPv4 + TCP port editor, read-only inheritance and atomic saves |
 | `SharedAssetsActivity.java` | global/project shared-asset root CRUD, rename and browser Open |
 | `SharedAssetRoot.java` | shared-asset registrations, scope filtering and request payloads |
 | `MarkdownLinks.java` | selectable chat link tap handling and shared-asset URL resolution |
 | `SandboxPath.java` | original path strings, permissions, and whole-list payloads |
-| `ArchivedActivity.java`    | everything archived: projects, then the sessions under live projects, each with Restore |
 | `UsageActivity.java`       | subscription usage: a meter per plan per window, polled about once a minute |
 | `Usage.java`               | the `/usage` response: windows, error classification, and carrying last good values across a transient failure (pure, unit tested) |
 | `Meter.java`               | the usage bar — severity-coloured fill on a wash of the same colour |
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
-| `Archive.java`             | live/archived split of the two list responses, and the archive's ordering (pure, unit tested) |
 | `Api.java`                 | OkHttp REST transport; reports successful responses without owning cache policy |
 | `CatalogRepository.java`   | explicit project/session/chat/worktree refresh operations, existence ordering/retry, cache freshness and invalidation |
 | `CatalogSnapshot.java` / `CatalogProgress.java` | completed refresh data and early catalog delivery |
@@ -365,7 +344,7 @@ is the protocol this client speaks to it.
 REST: `GET /agents`, `GET /usage`, `GET /projects`, `POST /projects`, `PATCH /projects`,
 `DELETE /projects`, `GET /worktrees`, `POST /worktrees`, `DELETE /worktrees/{id}`,
 `GET /sessions`, `POST /sessions`, `PATCH /sessions/{id}`, `DELETE /sessions/{id}`,
-`POST /sessions/{id}/detach-worktree`, `POST /sessions/{id}/stop`.
+`POST /sessions/{id}/stop`.
 
 **Ids.** `projects.id`, `sessions.id` and `project_id` are JSON **numbers** —
 they were uuid strings until a server migration renumbered every row. The app
@@ -411,8 +390,8 @@ usage starts — so it is re-read rather than cached and counted down locally. A
 **404 means an older server**, and the panel says so instead of retrying.
 
 `GET /projects` returns
-`[{ id, path, name, is_git_repo, archived_at, session_count,
-archived_session_count, last_active_at }]`, where
+`[{ id, path, name, is_git_repo, session_count, last_active_at }]`, where
+`session_count` includes all sessions and `last_active_at` considers all activity;
 `last_active_at` is `null` for a project with no sessions yet, and `is_git_repo` is a hint
 for whether to offer the worktree toggle. There are no nested project routes:
 `GET /sessions` carries `project_id` on every row, so the client filters
@@ -425,18 +404,8 @@ matching sessions by `working_dir`.
 and the row, so a new project lists immediately. On a 404 the app opens the
 project anyway and lets the first session's `mkdir -p` create the directory.
 
-`PATCH /projects` body: `{ path, archived }` — archives or unarchives the
-project, addressed by path in the body for the same reason `DELETE` is. The
-response is the project row plus `sessions_affected`, how many sessions the
-cascade archived or restored; it can legitimately be `0`, and on an unarchive it
-is **not** the same as `archived_session_count`, because sessions archived by
-hand beforehand stay archived. While archiving, a **409 means a session is busy**
-and *nothing was written* — its `detail` names them. While unarchiving, a 409
-means one or more effective working directories are unavailable; again nothing
-is restored, and those exact absolute paths must be recreated before retrying.
-
-`DELETE /projects` body: `{ path }` — removes the project, its sessions
-(archived ones included) and its worktrees, leaving the project's own directory
+`DELETE /projects` body: `{ path }` — removes the project, all its sessions
+and its worktrees, leaving the project's own directory
 alone. The path is in the body, not the URL, so no filesystem path has to be
 encoded into a path segment. The response adds `worktrees_removed` and
 `worktree_errors: [{ path, error }]` for the worktrees git refused to remove; it
@@ -453,8 +422,8 @@ switch branches in it), `session_count` counts attached sessions only and may be
 that project's worktrees, including worktrees with no sessions.
 
 `GET /directory-existence` returns an absolute-path-to-boolean object for all
-projects, worktrees and effective session directories, including archived and
-former-worktree sessions. Each screen fetches only the catalogs it uses, in
+projects, worktrees and effective session directories, including
+former-worktree sessions. Project and worktree responses have no `exists` field. Each screen fetches only the catalogs it uses, in
 parallel, then requests existence. Session cards render as soon as `/sessions`
 returns, without waiting for worktrees or existence. Absent keys mean unknown,
 not missing; a concurrent catalog change triggers one bounded retry.
@@ -486,20 +455,19 @@ same way before comparing. A **409** means a worktree is already there — routi
 since a template maps a branch to the same path every time — and the body has no
 id, so the app looks the worktree up by path and offers it instead. Everything
 else is a 400 carrying git's own message, which is passed through unedited.
-Creating one **in an archived project is a 409**, so the app withholds the
-control there rather than let it fail.
 
-`DELETE /worktrees/{id}` removes the directory and the row, **never** with
-`--force`. A 409 leaves both intact when a directory-dependent session is busy
-(active agent turn or shell command), or Git refuses safe removal. Idle live
-sessions and archived sessions do not block removal. Attached sessions retain
-the original `working_dir` and lose their worktree association; already-detached
-sessions are unchanged. History, identity and archive state are preserved.
-Before the request, the app checks attached sessions and all sessions using the
-same absolute path, warning that a missing directory prevents running or
-unarchiving until that path is recreated. For a
-worktree whose directory is already gone the call succeeds and tidies the row
-away, which is offered as "clean up" rather than delete.
+`DELETE /worktrees/{id}` safely removes a registered worktree and its row,
+**never** with `--force`. A 409 leaves metadata intact when a directory-dependent
+session is busy (active agent turn or shell command), Git registration listing
+fails, or Git refuses safe removal. Idle sessions do not block removal. If the
+path is not registered, only the server record is removed; an existing directory
+is left untouched. Attached sessions retain the original `working_dir` and lose
+their worktree association; former-worktree sessions are unchanged. History,
+identity, queues and settings are preserved. The app confirms the number of
+attached sessions and all other sessions using the same absolute path, then
+refetches sessions and worktrees before existence. Missing directories prevent
+running, not reading history or changing settings. A database failure after Git
+removal can leave stale metadata; retrying cleans up that record.
 
 `POST /sessions` body: `{ name, project_path, agent, worktree_id? }`, where
 `agent` is one of the ids from `GET /agents`. The
@@ -512,26 +480,15 @@ server on either side of the rename.
 
 Sessions come back with `project_id`, `working_dir` (their effective cwd) and
 `worktree_id`. A null worktree id means either the project directory, or a
-former worktree after explicit detachment; comparing `working_dir` with the
+former worktree after worktree removal; comparing `working_dir` with the
 project path distinguishes them.
 
 `DELETE /sessions/{id}` returns `{ status }` and touches nothing on disk: the
 worktree belongs to the project and stays, along with any other session in it.
 
-`PATCH /sessions/{id}` body (all optional): `{ name, auto_approve_write,
-auto_approve_command, archived }` — rename, flip the per-session auto-approve
-toggles, and/or archive it. Only the supplied fields are applied, so
-`{ archived: true }` alone disturbs nothing else. Unarchiving a session also
-unarchives its project — a live session under an archived project would have
-nowhere to show — so the app refetches afterwards. While archiving, a **409 means
-the session is busy**, which `status` alone cannot predict: a shell command from
-bash mode runs outside the turn state machine. While unarchiving, a 409 means its
-effective cwd is unavailable and must be recreated at the same absolute path.
-
-`POST /sessions/{id}/detach-worktree` is available only to archived sessions.
-It clears `worktree_id` but preserves `working_dir`, touches nothing on disk,
-and is idempotent after a successful detach. It is offered later in Session
-settings, never automatically or as part of archive.
+`PATCH /sessions/{id}` changes only supplied settings, such as `name`,
+`auto_approve_write`, `auto_approve_command`, and
+`auto_approve_inter_agent_communication`. Existing busy/approval rules remain.
 
 WebSocket: `ws(s)://<host>/ws/sessions/{id}`
 
@@ -565,23 +522,13 @@ server -> client : { type: "status",           status }   # idle | running | awa
                    { type: "question",         request_id, questions }
                    { type: "question_response", request_id, answers }
                    { type: "settings",         auto_approve_write, auto_approve_command }
-                   { type: "archived",         archived_at }   # null = brought back
-                   { type: "worktree_detached", worktree_id: null, working_dir }
                    { type: "done" }
                    { type: "error",            message }
 ```
 
-`archived` is sent on every change **and again on connect**, right after
-`status`, so a session archived from another device is picked up even if this
-client was offline when it happened. It is treated like `status` —
-authoritative, idempotent, safe to receive when nothing changed — and drives
-whether the composer is a composer or the archived notice. An `input` or `bash`
-frame sent for an archived session comes back as an ordinary
-`{ type: "error", message: "Session is archived" }`, which is exactly why the
-composer is taken away rather than left to collect text that can only bounce.
-`worktree_detached` updates the cwd and location display but is not replayed on
-connect, so the unfiltered REST session listing remains authoritative after an
-offline detach; duplicate events from retries are harmless.
+WebSocket initialization is persisted transcript replay, then `input_queue`,
+then `status`, followed by live publications. There is no worktree-removal
+frame; polling the REST session catalog updates saved paths and associations.
 
 **Message queue.** Every ordinary message, the user's or another agent's, goes
 through one server-owned queue, so the composer is not gated on status. An

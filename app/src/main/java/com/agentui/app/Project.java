@@ -23,36 +23,24 @@ final class Project {
     final boolean hasSandboxPaths;
     final String path;
     final String name;
-    /** Live sessions only — the archived ones are counted separately. */
+    /** All sessions belonging to the project. */
     final int sessionCount;
-    /** How many of the project's sessions are archived. */
-    final int archivedSessionCount;
-    /**
-     * Newest activity across the project's <em>live</em> sessions; empty when it
-     * has none, which an archived project never does. Do not read it as "never
-     * used" without checking {@link #isArchived()} first.
-     */
+    /** Newest activity across all sessions; empty when there is none. */
     final String lastActiveAt;
-    /**
-     * When the project was archived (ISO 8601, UTC), or empty while it is live.
-     * Archiving a project cascades to its sessions, so an archived one always
-     * reports {@code sessionCount == 0}.
-     */
-    final String archivedAt;
     /**
      * Whether the directory has a {@code .git} — a hint, not a guarantee, for
      * whether to offer a worktree. Creating one is where it is really checked.
      */
     final boolean isGitRepo;
 
-    Project(String id, String path, String name, int sessionCount, int archivedSessionCount,
-            String lastActiveAt, String archivedAt, boolean isGitRepo) {
-        this(id, path, name, sessionCount, archivedSessionCount, lastActiveAt, archivedAt,
+    Project(String id, String path, String name, int sessionCount,
+            String lastActiveAt, boolean isGitRepo) {
+        this(id, path, name, sessionCount, lastActiveAt,
                 isGitRepo, new ArrayList<>(), false, new ArrayList<>());
     }
 
-    private Project(String id, String path, String name, int sessionCount, int archivedSessionCount,
-            String lastActiveAt, String archivedAt, boolean isGitRepo,
+    private Project(String id, String path, String name, int sessionCount,
+            String lastActiveAt, boolean isGitRepo,
             List<SandboxPath> sandboxPaths, boolean hasSandboxPaths,
             List<SandboxNetworkDestination> sandboxNetworkAllowlist) {
         this.sandboxNetworkAllowlist = sandboxNetworkAllowlist;
@@ -62,13 +50,16 @@ final class Project {
         this.path = path;
         this.name = name;
         this.sessionCount = sessionCount;
-        this.archivedSessionCount = archivedSessionCount;
         this.lastActiveAt = lastActiveAt;
-        this.archivedAt = archivedAt;
         this.isGitRepo = isGitRepo;
     }
 
-    boolean isArchived() { return !archivedAt.isEmpty(); }
+    static Project find(List<Project> projects, String path) {
+        for (Project project : projects) {
+            if (project.path.equals(path)) return project;
+        }
+        return null;
+    }
 
     /** Whether {@code s} belongs to this project. See the static overload. */
     boolean owns(Session s) {
@@ -101,10 +92,7 @@ final class Project {
                 o.optString("path", ""),
                 o.optString("name", "(unnamed)"),
                 o.optInt("session_count", 0),
-                o.optInt("archived_session_count", 0),
                 lastActive,
-                // Same "null" trap as last_active_at, and the same treatment.
-                o.isNull("archived_at") ? "" : o.optString("archived_at", ""),
                 // Default false: a server that does not report it cannot make
                 // worktrees either, so the toggle stays hidden.
                 o.optBoolean("is_git_repo", false), pathsFrom(o), o.optJSONArray("sandbox_paths") != null,

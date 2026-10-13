@@ -7,7 +7,7 @@ import static org.junit.Assert.*;
 
 public class ProjectSearchExpansionTest {
     private Project project(String id, String path) {
-        return new Project(id, path, "App", 0, 0, "", "", false);
+        return new Project(id, path, "App", 0, "", false);
     }
 
     @Test public void projectsDefaultToExpandedAndToggleIndependently() {

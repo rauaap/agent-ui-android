@@ -188,7 +188,7 @@ public class SearchActivity extends Activity {
             LinearLayout children = Widgets.column(this);
             children.setPadding(Theme.dp(this, 16), 0, 0, 0);
             for (Session session : group.sessions) {
-                children.addView(SessionCards.build(this, session, p.path, p.isArchived(), agents, existence,
+                children.addView(SessionCards.build(this, session, p.path, agents, existence,
                         () -> startActivity(SessionActivity.intent(this, session, p.path)), null));
             }
             results.addView(children);
@@ -205,7 +205,6 @@ public class SearchActivity extends Activity {
         intent.putExtra(SessionListActivity.EXTRA_PROJECT_DIR, p.path);
         intent.putExtra(SessionListActivity.EXTRA_PROJECT_NAME, p.name);
         intent.putExtra(SessionListActivity.EXTRA_PROJECT_IS_REPO, p.isGitRepo);
-        intent.putExtra(SessionListActivity.EXTRA_PROJECT_ARCHIVED, p.isArchived());
         startActivity(intent);
     }
 

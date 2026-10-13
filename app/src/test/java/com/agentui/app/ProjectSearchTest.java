@@ -9,16 +9,16 @@ import java.util.Locale;
 import static org.junit.Assert.*;
 
 public class ProjectSearchTest {
-    private final Project app = new Project("1", "/projects/app", "App", 2, 0, "", "", true);
-    private final Project old = new Project("2", "/projects/old", "Old", 0, 1, "", "archived", false);
-    private final Session root = session("10", "Refactor", "1", app.path, "");
-    private final Session worktree = session("11", "Fix Login", "1", "/worktrees/login", "");
-    private final Session archived = session("12", "Login notes", "2", old.path, "archived");
+    private final Project app = new Project("1", "/projects/app", "App", 2, "", true);
+    private final Project old = new Project("2", "/projects/old", "Old", 1, "", false);
+    private final Session root = session("10", "Refactor", "1", app.path);
+    private final Session worktree = session("11", "Fix Login", "1", "/worktrees/login");
+    private final Session notes = session("12", "Login notes", "2", old.path);
     private final List<Project> projects = Arrays.asList(app, old);
-    private final List<Session> sessions = Arrays.asList(root, worktree, archived);
+    private final List<Session> sessions = Arrays.asList(root, worktree, notes);
 
-    private static Session session(String id, String name, String projectId, String dir, String archive) {
-        return new Session(id, name, projectId, dir, "", "pi", "idle", "", archive, false, false);
+    private static Session session(String id, String name, String projectId, String dir) {
+        return new Session(id, name, projectId, dir, "", "pi", "idle", "", false, false);
     }
 
     @Test public void startsEmptyAndClearingRestoresEmpty() {
@@ -32,16 +32,16 @@ public class ProjectSearchTest {
         assertEquals(1, result.size());
         assertSame(app, result.get(0).project);
         assertEquals(Arrays.asList(root, worktree), result.get(0).sessions);
-        assertEquals(Arrays.asList(root, worktree, archived), sessions);
+        assertEquals(Arrays.asList(root, worktree, notes), sessions);
     }
 
-    @Test public void matchingSessionsKeepTheirParentsIncludingArchiveAndWorktrees() {
+    @Test public void matchingSessionsKeepTheirParentsIncludingWorktrees() {
         List<ProjectSearch.Group> result = ProjectSearch.filter(projects, sessions, "login");
         assertEquals(2, result.size());
         assertSame(app, result.get(0).project);
         assertEquals(Collections.singletonList(worktree), result.get(0).sessions);
         assertSame(old, result.get(1).project);
-        assertEquals(Collections.singletonList(archived), result.get(1).sessions);
+        assertEquals(Collections.singletonList(notes), result.get(1).sessions);
     }
 
     @Test public void matchesPathsAndEmptyProjects() {
@@ -52,8 +52,8 @@ public class ProjectSearchTest {
     }
 
     @Test public void idOwnershipWinsOverPathAndLegacyPathsStillWork() {
-        Session wrong = session("20", "needle", "2", app.path, "");
-        Session legacy = session("21", "needle", "", app.path, "");
+        Session wrong = session("20", "needle", "2", app.path);
+        Session legacy = session("21", "needle", "", app.path);
         List<ProjectSearch.Group> result = ProjectSearch.filter(projects,
                 Arrays.asList(wrong, legacy), "needle");
         assertEquals(Collections.singletonList(legacy), result.get(0).sessions);

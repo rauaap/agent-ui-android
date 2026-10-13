@@ -239,12 +239,10 @@ public class ProjectListActivity extends Activity {
             Project after = projects.get(i);
             if (!before.id.equals(after.id)
                     || before.sessionCount != after.sessionCount
-                    || before.archivedSessionCount != after.archivedSessionCount
-                    || !before.archivedAt.equals(after.archivedAt)
                     || !before.lastActiveAt.equals(after.lastActiveAt)
                     || !before.name.equals(after.name)) return true;
-            String oldStatus = aggregateStatus(before, lastSessions);
-            String newStatus = aggregateStatus(after, sessions);
+            String oldStatus = ProjectCards.aggregateStatus(before, lastSessions);
+            String newStatus = ProjectCards.aggregateStatus(after, sessions);
             if (oldStatus == null ? newStatus != null : !oldStatus.equals(newStatus)) return true;
         }
         return false;
@@ -280,23 +278,16 @@ public class ProjectListActivity extends Activity {
         lastProjects = projects;
         lastSessions = sessions;
 
-        // The listing carries the archive too — it is deliberately unfiltered —
-        // so the split happens here rather than in a second request.
-        List<Project> shown = Archive.liveProjects(projects);
-        int hidden = projects.size() - shown.size();
-
-        int n = shown.size();
+        int n = projects.size();
         String count = n + (n == 1 ? " project" : " projects");
-        projectCount.setText(hidden == 0 ? count : count + "  ·  " + hidden + " archived");
+        projectCount.setText(count);
 
         if (n == 0) {
-            listContainer.addView(emptyBox(hidden > 0
-                    ? "Every project is archived.\nRestore one from Settings ▸ Archived."
-                    : "No projects yet.\nTap + New to start one."));
+            listContainer.addView(emptyBox("No projects yet.\nTap + New to start one."));
             return;
         }
 
-        for (Project p : shown) listContainer.addView(projectCard(p, sessions));
+        for (Project p : projects) listContainer.addView(projectCard(p, sessions));
     }
 
     private LinearLayout emptyBox(String message) {
@@ -321,9 +312,6 @@ public class ProjectListActivity extends Activity {
         LinearLayout card = ProjectCards.build(this, p, allSessions, existence,
                 () -> openProject(p), () -> confirmDelete(p));
 
-        // session_count is live sessions only, so it never promises sessions the
-        // list won't show; archived sessions get their own quiet link rather
-        // than being folded into it.
         LinearLayout metaRow = Widgets.row(this);
         String meta = p.sessionCount + (p.sessionCount == 1 ? " session" : " sessions");
         String when = SessionListActivity.formatTime(p.lastActiveAt);
@@ -331,33 +319,10 @@ public class ProjectListActivity extends Activity {
         TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
         metaView.setLayoutParams(lp(0, WRAP, 1f));
         metaRow.addView(metaView);
-        if (p.archivedSessionCount > 0) {
-            TextView archivedLink = Widgets.text(this,
-                    p.archivedSessionCount + " archived  ›", Theme.FAINT, 12.5f, false);
-            archivedLink.setClickable(true);
-            archivedLink.setOnClickListener(v -> openArchivedSessions(p));
-            Widgets.margins(archivedLink, Theme.dp(this, 10), 0, 0, 0);
-            metaRow.addView(archivedLink);
-        }
         Widgets.margins(metaRow, 0, Theme.dp(this, 8), 0, 0);
         card.addView(metaRow);
 
         return card;
-    }
-
-    /**
-     * Most urgent live status among this project's sessions. Waiting for user
-     * input wins over running, and idle projects get no indicator.
-     */
-    private String aggregateStatus(Project project, List<Session> sessions) {
-        return ProjectCards.aggregateStatus(project, sessions);
-    }
-
-    private void openArchivedSessions(Project p) {
-        Intent i = new Intent(this, ArchivedActivity.class);
-        i.putExtra(ArchivedActivity.EXTRA_PROJECT_ID, p.id);
-        i.putExtra(ArchivedActivity.EXTRA_PROJECT_NAME, p.name);
-        startActivity(i);
     }
 
     private void openProject(Project p) {
@@ -372,7 +337,6 @@ public class ProjectListActivity extends Activity {
         i.putExtra(SessionListActivity.EXTRA_PROJECT_DIR, p.path);
         i.putExtra(SessionListActivity.EXTRA_PROJECT_NAME, p.name);
         i.putExtra(SessionListActivity.EXTRA_PROJECT_IS_REPO, p.isGitRepo);
-        i.putExtra(SessionListActivity.EXTRA_PROJECT_ARCHIVED, p.isArchived());
         startActivity(i);
     }
 
@@ -578,18 +542,12 @@ public class ProjectListActivity extends Activity {
 
     /**
      * Spells out what deleting costs, since scrollback is not recoverable.
-     * Counts the archived sessions too: {@code session_count} is live ones only,
-     * and deleting the project takes the archive with it — archiving is not a
-     * shield against deletion and must not be made to look like one.
      */
     static String sessionsPhrase(Project p) {
-        int count = p.sessionCount + p.archivedSessionCount;
+        int count = p.sessionCount;
         if (count == 0) return "It has no sessions.";
         String phrase = "This removes " + count + (count == 1 ? " session" : " sessions")
                 + " and their history";
-        if (p.archivedSessionCount > 0) {
-            phrase += ", including " + p.archivedSessionCount + " archived";
-        }
         return phrase + ".";
     }
 

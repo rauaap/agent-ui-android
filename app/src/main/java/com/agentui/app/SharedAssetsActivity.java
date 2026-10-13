@@ -132,7 +132,7 @@ public class SharedAssetsActivity extends Activity {
             @Override public void onResult(List<Project> projects) {
                 if (isDestroyed()) return;
                 if (!sameServer()) { busy = false; render(); return; }
-                Project project = Archive.find(projects, projectPath);
+                Project project = Project.find(projects, projectPath);
                 if (project == null || project.id.isEmpty()) {
                     busy = false;
                     fail("This project is no longer on the server or has no project ID.");

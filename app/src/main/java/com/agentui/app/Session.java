@@ -44,14 +44,6 @@ final class Session {
     String reasoningLevel;
     String status;
     final String lastActiveAt;
-    /**
-     * When the session was archived (ISO 8601, UTC), or empty while it is live.
-     * A timestamp rather than a flag so the archive can be ordered by when
-     * things were filed; re-archiving keeps the original, so a redundant call
-     * does not jump the queue. Mutable: the {@code archived} WebSocket event
-     * carries changes made on another device.
-     */
-    String archivedAt;
     // Per-session auto-approve toggles. Reads always run, so only the mutating
     // categories are switchable.
     /** Null means an older server with no sandbox feature; never assume enabled. */
@@ -66,7 +58,7 @@ final class Session {
     boolean autoApproveInterAgent;
 
     Session(String id, String name, String projectId, String workingDir, String worktreeId,
-            String agent, String status, String lastActiveAt, String archivedAt,
+            String agent, String status, String lastActiveAt,
             boolean autoApproveWrite, boolean autoApproveCommand) {
         this.id = id;
         this.name = name;
@@ -76,24 +68,19 @@ final class Session {
         this.agent = agent;
         this.status = status;
         this.lastActiveAt = lastActiveAt;
-        this.archivedAt = archivedAt;
         this.autoApproveWrite = autoApproveWrite;
         this.autoApproveCommand = autoApproveCommand;
     }
 
-    boolean isArchived() { return !archivedAt.isEmpty(); }
-
     /** A released worktree path, rather than the project's own directory. */
     boolean isFormerWorktree(String projectPath) {
-        return worktreeId.isEmpty() && projectPath != null
-                && !workingDir.equals(projectPath);
+        return isFormerWorktree(worktreeId, workingDir, projectPath);
     }
 
-    /** Whether this detached session preserves the given worktree's path. */
-    boolean dependsOnFormerWorktree(Worktree worktree, String projectPath) {
-        return projectId.equals(worktree.projectId)
-                && isFormerWorktree(projectPath)
-                && workingDir.equals(worktree.path);
+    /** Shared location rule for catalog models and activity metadata. */
+    static boolean isFormerWorktree(String worktreeId, String workingDir, String projectPath) {
+        return worktreeId.isEmpty() && projectPath != null
+                && !workingDir.equals(projectPath);
     }
 
     static Session from(JSONObject o) {
@@ -109,13 +96,10 @@ final class Session {
                 o.optString("agent", "Agent"),
                 o.optString("status", "idle"),
                 o.optString("last_active_at", ""),
-                // A live session reports archived_at: null, and optString would
-                // hand back the literal "null" for it.
-                o.isNull("archived_at") ? "" : o.optString("archived_at", ""),
                 o.optBoolean("auto_approve_write", false),
                 o.optBoolean("auto_approve_command", false));
         session.autoApproveInterAgent = o.optBoolean("auto_approve_inter_agent_communication", false);
-        // A legacy session reports model: null; see archived_at above.
+        // A legacy session reports model: null, not the string "null".
         session.model = o.isNull("model") ? null : o.optString("model", null);
         session.reasoningLevel = o.isNull("reasoning_level") ? null : o.optString("reasoning_level");
         session.sandbox = o.opt("sandbox") instanceof Boolean ? (Boolean) o.opt("sandbox") : null;

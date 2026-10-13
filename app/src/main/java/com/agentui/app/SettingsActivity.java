@@ -249,11 +249,6 @@ public class SettingsActivity extends Activity {
                     startActivity(new android.content.Intent(this, SharedAssetsActivity.class));
                 }));
         form.addView(spacer(10));
-        // No count here: the archive lives on the server, and fetching both
-        // listings to put a number on a menu row would not earn the round trip.
-        form.addView(navRow("Archived projects and sessions",
-                "Work you've filed away. Still readable, and restorable.",
-                v -> startActivity(new android.content.Intent(this, ArchivedActivity.class))));
 
         scroll.addView(form);
         root.addView(scroll);

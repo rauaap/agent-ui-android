@@ -12,9 +12,9 @@ final class WorktreeRemoval {
         if (count == 0) return "";
         return "\n\n" + count + (count == 1 ? " session uses" : " sessions use")
                 + " this directory (including attached and already-detached sessions). "
-                + "Sessions, conversation history and archive state are preserved. Attached sessions "
+                + "Sessions, conversation history, queued inputs and settings are preserved. Attached sessions "
                 + "become former-worktree sessions and keep this exact working directory. "
-                + "They cannot run, or be unarchived, while the directory is missing. "
+                + "Attempts to run fail while the directory is missing. "
                 + "Recreate a directory at the same absolute path to use them again. "
                 + "Active agent turns or shell commands block removal.";
     }

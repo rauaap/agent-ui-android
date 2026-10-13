@@ -168,7 +168,7 @@ public class SandboxNetworkActivity extends Activity {
                 } else api.listProjects(new Api.Cb<List<Project>>() {
                     @Override public void onResult(List<Project> projects) {
                         if (isDestroyed()) return;
-                        Project project = Archive.find(projects, projectPath);
+                        Project project = Project.find(projects, projectPath);
                         if (project == null) fail("This project is no longer on the server.");
                         else { ready(project.sandboxNetworkAllowlist); status.setText(""); }
                     }

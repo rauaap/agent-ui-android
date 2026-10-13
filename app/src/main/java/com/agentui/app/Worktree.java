@@ -29,28 +29,19 @@ final class Worktree {
      */
     final String branch;
     /**
-     * How many sessions remain attached to this worktree. Explicitly detached
-     * sessions are excluded even though they preserve the same working path.
+     * How many sessions remain attached to this managed worktree.
      * Zero is an ordinary state — an unused worktree still there to attach to.
      */
     final int sessionCount;
-    /** Legacy metadata used by archive badges; catalog screens use DirectorySnapshot. */
-    final boolean exists;
     final String createdAt;
 
     Worktree(String id, String projectId, String path, String branch,
              int sessionCount, String createdAt) {
-        this(id, projectId, path, branch, sessionCount, true, createdAt);
-    }
-
-    Worktree(String id, String projectId, String path, String branch,
-             int sessionCount, boolean exists, String createdAt) {
         this.id = id;
         this.projectId = projectId;
         this.path = path;
         this.branch = branch;
         this.sessionCount = sessionCount;
-        this.exists = exists;
         this.createdAt = createdAt;
     }
 
@@ -65,17 +56,7 @@ final class Worktree {
                 o.optString("path", ""),
                 branch,
                 o.optInt("session_count", 0),
-                o.optBoolean("exists", true),
                 o.optString("created_at", ""));
-    }
-
-    /** Only an attached worktree explicitly reported missing warrants a warning. */
-    static boolean isMissingFor(Session session, java.util.List<Worktree> worktrees) {
-        if (session.worktreeId.isEmpty()) return false;
-        for (Worktree worktree : worktrees) {
-            if (session.worktreeId.equals(worktree.id)) return !worktree.exists;
-        }
-        return false;
     }
 
     /** "created on fix-login · 2 sessions", skipping whichever part is absent. */

@@ -59,7 +59,6 @@ public class SessionActivity extends Activity {
     static final String EXTRA_AUTO_WRITE = "auto_write";
     static final String EXTRA_AUTO_COMMAND = "auto_command";
     static final String EXTRA_AUTO_INTER_AGENT = "auto_inter_agent";
-    static final String EXTRA_ARCHIVED = "archived";
 
     private static final int REQ_SETTINGS = 2;
     private static final int REQ_IMAGE = 3;
@@ -80,7 +79,6 @@ public class SessionActivity extends Activity {
         i.putExtra(EXTRA_AUTO_WRITE, s.autoApproveWrite);
         i.putExtra(EXTRA_AUTO_COMMAND, s.autoApproveCommand);
         i.putExtra(EXTRA_AUTO_INTER_AGENT, s.autoApproveInterAgent);
-        i.putExtra(EXTRA_ARCHIVED, s.isArchived());
         return i;
     }
 
@@ -161,14 +159,6 @@ public class SessionActivity extends Activity {
     private PathAdapter pathAdapter;
     private boolean pathPanelOpen;
     private int pathPanelSearchSerial;
-    /**
-     * Archived sessions are read-only: the transcript replays as usual, but the
-     * server refuses prompts and shell commands, so the composer is swapped for
-     * a notice rather than left to collect text that can only bounce.
-     */
-    private boolean archived;
-    private LinearLayout composerHolder; // swaps between the composer and that notice
-    private Boolean renderedArchiveState; // null until the initial composer render
     // Accepted inputs still waiting for a turn, shown above the composer and
     // kept out of the transcript until the server ships them.
     private MessageQueue messageQueue = new MessageQueue();
@@ -244,7 +234,6 @@ public class SessionActivity extends Activity {
         autoApproveWrite = getIntent().getBooleanExtra(EXTRA_AUTO_WRITE, false);
         autoApproveCommand = getIntent().getBooleanExtra(EXTRA_AUTO_COMMAND, false);
         autoApproveInterAgent = getIntent().getBooleanExtra(EXTRA_AUTO_INTER_AGENT, false);
-        archived = getIntent().getBooleanExtra(EXTRA_ARCHIVED, false);
         notifyOn = api.prefs().notifyEnabled(sessionId);
 
         imageServer = api.prefs().httpBase();
@@ -259,7 +248,6 @@ public class SessionActivity extends Activity {
         input.setText(composerDraft.restore());
         input.setSelection(input.length());
         renderComposerImages();
-        applyArchived(archived);
         applyStatus(status);
         restoreCachedMetadata();
         connect();
@@ -291,7 +279,7 @@ public class SessionActivity extends Activity {
     }
 
     /**
-     * The detach event is not replayed on WebSocket connect. REST therefore
+     * Worktree removal has no WebSocket event. REST polling therefore
      * refreshes effective cwd/worktree metadata, especially for notification
      * intents that carry only an id and name.
      */
@@ -333,7 +321,6 @@ public class SessionActivity extends Activity {
             autoApproveWrite = session.autoApproveWrite;
             autoApproveCommand = session.autoApproveCommand;
             autoApproveInterAgent = session.autoApproveInterAgent;
-            applyArchived(session.isArchived());
             applyStatus(session.status);
             renderPending();
             renderLocation();
@@ -469,8 +456,8 @@ public class SessionActivity extends Activity {
         Widgets.margins(statusHolder, Theme.dp(this, 6), 0, 0, Theme.dp(this, 2));
         nameRow.addView(statusHolder);
         headings.addView(nameRow, lp(WRAP, WRAP));
-        // The effective cwd remains the former worktree path after an explicit
-        // detach; worktree_id null must not make that look like the project root.
+        // Worktree removal preserves the effective cwd; worktree_id null must
+        // not make a former worktree path look like the project root.
         locationHolder = Widgets.row(this);
         renderLocation();
         // Wrap width for the same reason as the name row: the worktree id
@@ -699,9 +686,7 @@ public class SessionActivity extends Activity {
         sendBtn.setOnClickListener(v -> sendPrompt());
         composer.addView(sendBtn);
 
-        composerHolder = Widgets.column(this);
-        composerHolder.addView(composerBox);
-        footer.addView(composerHolder);
+        footer.addView(composerBox);
         root.addView(footer);
 
         buildPathPanel(shell);
@@ -913,7 +898,7 @@ public class SessionActivity extends Activity {
             TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
             Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
             locationHolder.addView(tag);
-        } else if (projectDir != null && !workingDir.equals(projectDir)) {
+        } else if (Session.isFormerWorktree(worktreeId, workingDir, projectDir)) {
             TextView tag = Widgets.tag(this, "former worktree", Theme.MUTED);
             Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
             locationHolder.addView(tag);
@@ -937,81 +922,6 @@ public class SessionActivity extends Activity {
     }
 
     /* ---------------------------------------------------------------- */
-    /* archived                                                         */
-    /* ---------------------------------------------------------------- */
-
-    /**
-     * Show the composer, or — when the session is archived — the reason it is
-     * gone and the one action that brings it back. Authoritative and idempotent,
-     * like {@link #applyStatus}: it is driven by the {@code archived} event,
-     * which the server also sends on connect, so another device's archive
-     * arrives here without anything being polled.
-     */
-    private void applyArchived(boolean value) {
-        archived = value;
-        if (composerHolder == null) return;
-        // Replay and metadata refresh repeat the current state. Detaching an
-        // unchanged composer disrupts the focused EditText's input connection.
-        if (renderedArchiveState != null && renderedArchiveState == value) return;
-        renderedArchiveState = value;
-        composerHolder.removeAllViews();
-        if (!archived) {
-            composerHolder.addView(composerBox);
-            return;
-        }
-
-        // Whatever was half-typed can't be sent now; keeping the keyboard open
-        // over a dead composer would be the only thing worse than losing it.
-        hideKeyboard();
-
-        LinearLayout box = Widgets.row(this);
-        box.setBackground(Theme.rounded(this, Theme.PANEL, 18, Theme.LINE, 1));
-        int p = Theme.dp(this, 14);
-        box.setPadding(p, p, p, p);
-        TextView text = Widgets.text(this,
-                "This session is archived. Unarchive to continue working in it.",
-                Theme.MUTED, 13, false);
-        text.setLayoutParams(lp(0, WRAP, 1f));
-        box.addView(text);
-        TextView button = Widgets.ghostButton(this, "Unarchive");
-        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        Widgets.margins(button, Theme.dp(this, 10), 0, 0, 0);
-        button.setOnClickListener(this::unarchive);
-        box.addView(button);
-        composerHolder.addView(box);
-    }
-
-    private void unarchive(View button) {
-        button.setEnabled(false);
-        api.setSessionArchived(sessionId, false, new Api.StatusCb<Session>() {
-            @Override public void onResult(Session session) {
-                // The server unarchives the project along with it, so the lists
-                // behind this screen are stale too — they reload on resume.
-                applyArchived(session.isArchived());
-            }
-            @Override public void onError(String message) {
-                button.setEnabled(true);
-                android.widget.Toast.makeText(SessionActivity.this,
-                        "Couldn't unarchive: " + message,
-                        android.widget.Toast.LENGTH_LONG).show();
-            }
-            @Override public void onHttpError(int code, String message) {
-                button.setEnabled(true);
-                if (code == 409) showMissingWorkingDirectory(message);
-                else onError(message);
-            }
-        });
-    }
-
-    private void showMissingWorkingDirectory(String detail) {
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("Working directory unavailable")
-                .setMessage(detail + "\n\nRecreate a directory at the same absolute path, then "
-                        + "try unarchiving again:\n\n" + workingDir)
-                .setPositiveButton("OK", null)
-                .show();
-    }
-
     private void hideKeyboard() {
         android.view.inputmethod.InputMethodManager imm =
                 (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -1298,7 +1208,6 @@ public class SessionActivity extends Activity {
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_WRITE, autoApproveWrite);
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_COMMAND, autoApproveCommand);
         i.putExtra(SessionSettingsActivity.EXTRA_AUTO_INTER_AGENT, autoApproveInterAgent);
-        i.putExtra(SessionSettingsActivity.EXTRA_ARCHIVED, archived);
         i.putExtra(SessionSettingsActivity.EXTRA_WORKING_DIR, workingDir);
         i.putExtra(SessionSettingsActivity.EXTRA_PROJECT_DIR, projectDir);
         i.putExtra(SessionSettingsActivity.EXTRA_WORKTREE_ID, worktreeId);
@@ -1314,18 +1223,6 @@ public class SessionActivity extends Activity {
             return;
         }
         if (requestCode != REQ_SETTINGS) return;
-        // Archived from settings: the session is no longer on the list this
-        // screen was opened from, so close it and follow it back there. Staying
-        // put and going read-only is the right answer for someone else's
-        // archive, arriving over the socket — not for the one you just did.
-        if (data != null
-                && data.getBooleanExtra(SessionSettingsActivity.EXTRA_JUST_ARCHIVED, false)) {
-            finish();
-            return;
-        }
-        if (data != null) {
-            applyArchived(data.getBooleanExtra(SessionSettingsActivity.EXTRA_ARCHIVED, archived));
-        }
         // The notification opt-in lives in Prefs; re-read it after settings close.
         notifyOn = api.prefs().notifyEnabled(sessionId);
         if (data != null) {
@@ -1555,19 +1452,6 @@ public class SessionActivity extends Activity {
                 if (awaitingReplay) commitReplay();
                 scrollback.replayComplete = true;
                 applyStatus(msg.optString("status", "idle"));
-                break;
-            case "archived":
-                // Sent on every change and again on connect, so a session
-                // archived from another device is caught even if it happened
-                // while this client was offline. archived_at null means live.
-                applyArchived(!msg.isNull("archived_at"));
-                break;
-            case "worktree_detached":
-                // Not replayed on connect, but authoritative and safe to receive
-                // more than once after an idempotent detach retry.
-                worktreeId = "";
-                workingDir = msg.optString("working_dir", workingDir);
-                renderLocation();
                 break;
             case "settings":
                 SessionState.get(api, sessionId).settings(msg);
@@ -1937,7 +1821,7 @@ public class SessionActivity extends Activity {
         content.addView(body);
         addImages(content, images);
 
-        // Names are looked up on every draw, so a rename or archive shows.
+        // Names are looked up on every draw, so a rename shows.
         Runnable render = () -> renderSender(sender, source);
         render.run();
         if (source.kind == InterAgent.Source.Kind.AGENT) directoryViews.add(render);
@@ -1989,11 +1873,6 @@ public class SessionActivity extends Activity {
         TextView idView = Widgets.idLabel(this, id, "Session", 12);
         Widgets.margins(idView, Theme.dp(this, 8), 0, 0, 0);
         sender.addView(idView);
-        if (s.isArchived()) {
-            TextView tag = Widgets.tag(this, "archived", Theme.FAINT);
-            Widgets.margins(tag, Theme.dp(this, 8), 0, 0, 0);
-            sender.addView(tag);
-        }
     }
 
     /** Open the session that sent a message, in whichever project it lives. */
@@ -3050,7 +2929,7 @@ public class SessionActivity extends Activity {
     }
 
     private void pickImage() {
-        if (archived || !imageCapable() || Composer.isBash(input.getText().toString())) return;
+        if (!imageCapable() || Composer.isBash(input.getText().toString())) return;
         if (composerImages.size() >= ImageAttachment.MAX_COUNT) {
             imageNotice("At most 10 images per message");
             return;
@@ -3063,7 +2942,7 @@ public class SessionActivity extends Activity {
     }
 
     private void selectImage(android.net.Uri uri) {
-        if (archived || !imageCapable() || composerImages.size() >= ImageAttachment.MAX_COUNT) return;
+        if (!imageCapable() || composerImages.size() >= ImageAttachment.MAX_COUNT) return;
         ComposerImage item = new ComposerImage();
         composerImages.add(item);
         renderComposerImages();
@@ -3243,9 +3122,6 @@ public class SessionActivity extends Activity {
     /* ---------------------------------------------------------------- */
 
     private void sendPrompt() {
-        // The composer is off screen while archived, but the IME's send action
-        // can still reach here from a detached-but-focused input.
-        if (archived) return;
         Composer parsed = Composer.parse(input.getText().toString(), !composerImages.isEmpty());
         if (parsed == null || socket == null) return;
         List<ImageAttachment> images = successfulComposerImages();

@@ -9,9 +9,9 @@ import static org.junit.Assert.*;
 public class CatalogRepositoryTest {
     static class Source implements CatalogRepository.Source {
         final List<String> calls = new ArrayList<>();
-        final Project project = new Project("p", "/app", "App", 0, 0, "", "", true);
+        final Project project = new Project("p", "/app", "App", 1, "", true);
         final Worktree worktree = new Worktree("w", "p", "/worktree", "fix", 0, "");
-        final Session session = new Session("s", "S", "p", "/worktree", "w", "pi", "idle", "", "archived", false, false);
+        final Session session = new Session("s", "S", "p", "/worktree", "w", "pi", "idle", "", false, false);
         Api.Cb<List<Project>> projects;
         Api.Cb<List<Worktree>> worktrees;
         Api.Cb<List<Session>> sessions;
@@ -115,7 +115,7 @@ public class CatalogRepositoryTest {
         source.completeExistence();
         assertTrue(removed.result.worktrees.isEmpty());
         Session preserved = removed.result.sessions.get(0);
-        assertEquals("s", preserved.id); assertEquals("archived", preserved.archivedAt);
+        assertEquals("s", preserved.id); assertEquals("S", preserved.name);
         assertEquals("/worktree", preserved.workingDir);
         assertTrue(preserved.isFormerWorktree("/app"));
         assertTrue(removed.result.existence.missing(preserved.workingDir));

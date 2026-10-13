@@ -15,15 +15,7 @@ import static com.agentui.app.Widgets.lp;
 final class SessionCards {
     private SessionCards() {}
 
-    static void addMissingTag(Context context, LinearLayout row, Session session,
-                              List<Worktree> worktrees) {
-        if (!Worktree.isMissingFor(session, worktrees)) return;
-        TextView tag = Widgets.tag(context, "missing", Theme.DANGER);
-        Widgets.margins(tag, 0, 0, Theme.dp(context, 8), 0);
-        row.addView(tag);
-    }
-
-    static View build(Context context, Session s, String projectDir, boolean projectArchived,
+    static View build(Context context, Session s, String projectDir,
                       List<Agent> agents, DirectorySnapshot existence, Runnable open, Runnable menu) {
         LinearLayout card = Widgets.column(context);
         card.setBackground(Theme.rounded(context, Theme.PANEL, 14, Theme.LINE, 1));
@@ -41,11 +33,6 @@ final class SessionCards {
         name.setLayoutParams(lp(0, WRAP, 1f));
         head.addView(name);
         LinearLayout actions = Widgets.row(context);
-        if (s.isArchived() && !projectArchived) {
-            TextView tag = Widgets.tag(context, "archived", Theme.MUTED);
-            Widgets.margins(tag, 0, 0, Theme.dp(context, 8), 0);
-            actions.addView(tag);
-        }
         actions.addView(Widgets.statusBadge(context, s.status));
         head.addView(actions);
         card.addView(head);

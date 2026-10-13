@@ -67,9 +67,6 @@
             android:name=".ProjectSettingsActivity"
             android:exported="false" />
         <activity
-            android:name=".ArchivedActivity"
-            android:exported="false" />
-        <activity
             android:name=".UsageActivity"
             android:exported="false" />
         <service

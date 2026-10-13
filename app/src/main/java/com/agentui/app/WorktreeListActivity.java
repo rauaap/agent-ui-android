@@ -32,7 +32,6 @@ public class WorktreeListActivity extends Activity {
 
     static final String EXTRA_PROJECT_DIR = "project_dir";
     static final String EXTRA_PROJECT_NAME = "project_name";
-    static final String EXTRA_PROJECT_ARCHIVED = "project_archived";
 
     private Api api;
     private final ForegroundPoller poller = new ForegroundPoller(3000, this::loadWorktrees);
@@ -41,13 +40,6 @@ public class WorktreeListActivity extends Activity {
     private CatalogRepository catalogs;
     private String projectDir;
     private String projectName;
-    /**
-     * An archived project's worktrees still list, and can still be removed —
-     * archiving is about what clutters the project and session lists, and a
-     * worktree appears in neither. Only cutting a <em>new</em> one is refused
-     * server-side, so only that control goes away.
-     */
-    private boolean projectArchived;
 
     private TextView worktreeCount;
     private LinearLayout listContainer;
@@ -61,7 +53,6 @@ public class WorktreeListActivity extends Activity {
         catalogs = new CatalogRepository(api);
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
         projectName = getIntent().getStringExtra(EXTRA_PROJECT_NAME);
-        projectArchived = getIntent().getBooleanExtra(EXTRA_PROJECT_ARCHIVED, false);
         if (projectDir == null) {
             finish();
             return;
@@ -119,16 +110,9 @@ public class WorktreeListActivity extends Activity {
         headings.addView(project);
         topbar.addView(headings);
 
-        // git worktree add is refused in an archived project, so the control is
-        // withheld rather than left to 409. Removal stays.
-        if (!projectArchived) {
-            TextView newBtn = Widgets.primaryButton(this, "+ New");
-            newBtn.setOnClickListener(v -> createWorktree());
-            topbar.addView(newBtn);
-        } else {
-            TextView tag = Widgets.tag(this, "archived", Theme.MUTED);
-            topbar.addView(tag);
-        }
+        TextView newBtn = Widgets.primaryButton(this, "+ New");
+        newBtn.setOnClickListener(v -> createWorktree());
+        topbar.addView(newBtn);
 
         root.addView(topbar);
 
@@ -191,9 +175,7 @@ public class WorktreeListActivity extends Activity {
         int n = worktrees.size();
         worktreeCount.setText(n + (n == 1 ? " worktree" : " worktrees"));
         if (n == 0) {
-            listContainer.addView(emptyBox(projectArchived
-                    ? "No worktrees.\nUnarchive the project to cut one."
-                    : "No worktrees yet.\n"
+            listContainer.addView(emptyBox("No worktrees yet.\n"
                             + "Tap + New to branch off the project's current HEAD."));
             return;
         }
@@ -363,12 +345,10 @@ public class WorktreeListActivity extends Activity {
     }
 
     /** Opens this screen for a project. */
-    static Intent intent(Activity from, String projectDir, String projectName,
-                         boolean projectArchived) {
+    static Intent intent(Activity from, String projectDir, String projectName) {
         Intent i = new Intent(from, WorktreeListActivity.class);
         i.putExtra(EXTRA_PROJECT_DIR, projectDir);
         i.putExtra(EXTRA_PROJECT_NAME, projectName);
-        i.putExtra(EXTRA_PROJECT_ARCHIVED, projectArchived);
         return i;
     }
 

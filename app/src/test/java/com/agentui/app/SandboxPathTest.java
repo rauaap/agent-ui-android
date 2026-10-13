@@ -64,7 +64,7 @@ public class SandboxPathTest {
         assertEquals(-1, SandboxPath.indexOf(paths, "~/config/nested"));
     }
 
-    @Test public void replacementIsExplicitWholeScopeAndDoesNotTouchArchiveOrOtherSettings() throws Exception {
+    @Test public void replacementIsExplicitWholeScopeAndDoesNotTouchOtherSettings() throws Exception {
         List<SandboxPath> paths = Arrays.asList(new SandboxPath("/config", false), new SandboxPath("/data", true));
         JSONObject server = SandboxPath.replacement(null, paths);
         assertEquals(1, server.length());

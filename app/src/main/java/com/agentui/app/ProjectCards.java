@@ -42,11 +42,6 @@ final class ProjectCards {
             Widgets.margins(badge, Theme.dp(context, 8), 0, 0, 0);
             head.addView(badge);
         }
-        if (p.isArchived()) {
-            TextView tag = Widgets.tag(context, "archived", Theme.MUTED);
-            Widgets.margins(tag, Theme.dp(context, 8), 0, 0, 0);
-            head.addView(tag);
-        }
         if (existence.missing(p.path)) {
             TextView tag = Widgets.tag(context, "missing", Theme.DANGER);
             Widgets.margins(tag, Theme.dp(context, 8), 0, 0, 0);
