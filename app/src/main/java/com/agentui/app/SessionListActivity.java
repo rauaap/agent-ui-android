@@ -241,6 +241,15 @@ public class SessionListActivity extends Activity {
             worktreesSupported = true;
             listContainer.removeAllViews();
         }
+        // A stopped Activity normally retains its cards. Do not decode cached
+        // catalogs or rebuild those cards before the back transition can draw.
+        if (lastSessions != null) {
+            // Retry an interrupted/failed initial agent load without a synchronous
+            // cache hit. Otherwise keep the labels already used by the cards.
+            if (agents.isEmpty()) loadAgents(false);
+            refreshCatalogs(true);
+            return;
+        }
         existence = catalogs.cachedExistence();
         List<Worktree> cachedWorktrees = catalogs.cachedWorktrees(projectDir);
         worktrees.clear();
@@ -252,7 +261,7 @@ public class SessionListActivity extends Activity {
         // the address. Cards show raw ids until the fresh list lands.
         agents.clear();
         agentsError = null;
-        loadAgents();
+        loadAgents(true);
         refreshCatalogs(true);
     }
 
@@ -319,32 +328,36 @@ public class SessionListActivity extends Activity {
 
     /**
      * The agents this server can run, with their model catalogs. Fixed from
-     * server startup, but refetched with the list rather than once per
-     * process: it is a different server's answer after the address changes in
-     * Settings. A failure is kept for the new-session dialog, which refuses to
+     * server startup, so retained with the populated list on return. A server
+     * identity change clears them and loads the new server's catalog.
+     * A failure is kept for the new-session dialog, which refuses to
      * create without an agent and model; an unreachable server is already
      * being reported by the session list itself.
      */
-    private void loadAgents() {
+    private void loadAgents(boolean useCache) {
         agentsLoading = true;
-        agentRefresh.start(false, run -> catalogs.agents(run.finish(new Api.Cb<List<Agent>>() {
-            @Override public void onResult(List<Agent> list) {
-                agents.clear();
-                agents.addAll(list);
-                agentsError = null;
-                agentsLoading = false;
-                // Cards label the agent and model through this, and are often
-                // on screen by the time it lands.
-                if (lastSessions != null) renderList(lastSessions, null);
-                openPendingNewSession();
-            }
+        agentRefresh.start(false, run -> {
+            Api.Cb<List<Agent>> callback = run.finish(new Api.Cb<List<Agent>>() {
+                @Override public void onResult(List<Agent> list) {
+                    agents.clear();
+                    agents.addAll(list);
+                    agentsError = null;
+                    agentsLoading = false;
+                    // Cards label the agent and model through this, and are often
+                    // on screen by the time it lands.
+                    if (lastSessions != null) renderList(lastSessions, null);
+                    openPendingNewSession();
+                }
 
-            @Override public void onError(String message) {
-                agentsError = message;
-                agentsLoading = false;
-                openPendingNewSession();
-            }
-        })));
+                @Override public void onError(String message) {
+                    agentsError = message;
+                    agentsLoading = false;
+                    openPendingNewSession();
+                }
+            });
+            if (useCache) catalogs.agents(callback);
+            else api.listAgents(callback);
+        });
     }
 
     private void openPendingNewSession() {
