@@ -13,6 +13,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -38,6 +39,25 @@ public class SearchActivity extends Activity {
     private boolean loading;
     private String error;
     private final ProjectSearch.Expansion expansion = new ProjectSearch.Expansion();
+    private final SearchResults<View, SearchGroup, SessionCards.Card> searchResults =
+            new SearchResults<>(new SearchResults.Adapter<View, SearchGroup, SessionCards.Card>() {
+                public SearchGroup createGroup() { return new SearchGroup(); }
+                public View projectRow(SearchGroup group) { return group.card; }
+                public View childrenRow(SearchGroup group) { return group.children; }
+                public CardViews.Rows<View> childRows(SearchGroup group) { return CardViews.rows(group.children); }
+                public void bindGroup(SearchGroup view, ProjectSearch.Group data, boolean expanded) {
+                    view.bind(data, expanded);
+                }
+                public SessionCards.Card createSession(SearchGroup group) {
+                    return new SessionCards.Card(SearchActivity.this,
+                            fresh -> startActivity(SessionActivity.intent(SearchActivity.this, fresh, group.project.path)),
+                            null);
+                }
+                public void bindSession(SearchGroup group, SessionCards.Card view, Session fresh) {
+                    view.bind(fresh, group.project.path, agents, existence);
+                }
+            });
+    private TextView resultNotice;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -113,6 +133,7 @@ public class SearchActivity extends Activity {
         query.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                searchResults.setQuery(s.toString());
                 render();
                 scroll.scrollTo(0, 0);
             }
@@ -128,6 +149,7 @@ public class SearchActivity extends Activity {
         agentRefresh.cancel();
         if (!catalogs.identity().equals(dataIdentity)) {
             dataIdentity = catalogs.identity();
+            searchResults.clear();
             projectsInitialized = sessionsInitialized = false;
             projects = Collections.emptyList();
             sessions = Collections.emptyList();
@@ -142,15 +164,16 @@ public class SearchActivity extends Activity {
                 if (cached.existence != null) existence = cached.existence;
                 if (cached.projects != null) { projects = cached.projects; projectsInitialized = true; }
                 if (cached.sessions != null) { sessions = cached.sessions; sessionsInitialized = true; }
-                contentUpdated();
+                if (cached.projects != null || cached.sessions != null) catalogUpdated();
+                else contentUpdated();
             }
             @Override public void projects(List<Project> list) {
                 projects = list; projectsInitialized = true;
-                contentUpdated();
+                catalogUpdated();
             }
             @Override public void sessions(List<Session> list) {
                 sessions = list; sessionsInitialized = true;
-                contentUpdated();
+                catalogUpdated();
             }
             @Override public void onResult(CatalogSnapshot snapshot) {
                 existence = snapshot.existence;
@@ -175,6 +198,11 @@ public class SearchActivity extends Activity {
 
     private boolean hasPopulatedData() { return projectsInitialized && sessionsInitialized; }
 
+    private void catalogUpdated() {
+        searchResults.updateCatalog(projects, sessions);
+        contentUpdated();
+    }
+
     private void contentUpdated() {
         loading = !hasPopulatedData();
         if (!loading) error = null;
@@ -182,33 +210,48 @@ public class SearchActivity extends Activity {
     }
 
     private void render() {
-        results.removeAllViews();
-        String value = query.getText().toString();
-        if (value.trim().isEmpty()) return;
-        if (loading || error != null) {
-            results.addView(Widgets.text(this, loading ? "Loading…" : error, Theme.MUTED, 14, false));
-            return;
-        }
-        List<ProjectSearch.Group> groups = ProjectSearch.filter(projects, sessions, value);
-        if (groups.isEmpty()) results.addView(Widgets.text(this, "No matches", Theme.FAINT, 14, false));
-        for (ProjectSearch.Group group : groups) {
-            Project p = group.project;
-            boolean expanded = expansion.isExpanded(p);
-            results.addView(ProjectCards.build(this, p, sessions, existence,
-                    () -> openProject(p), expanded ? R.drawable.ic_collapse : R.drawable.ic_expand,
-                    (expanded ? "Collapse " : "Expand ") + p.name,
-                    () -> {
-                        expansion.toggle(p);
-                        render();
-                    }));
-            if (!expanded || group.sessions.isEmpty()) continue;
-            LinearLayout children = Widgets.column(this);
-            children.setPadding(Theme.dp(this, 16), 0, 0, 0);
-            for (Session session : group.sessions) {
-                children.addView(SessionCards.build(this, session, p.path, agents, existence,
-                        () -> startActivity(SessionActivity.intent(this, session, p.path)), null));
+        List<View> rows = new ArrayList<>();
+        if (searchResults.hasQuery()) {
+            if (loading || error != null) {
+                rows.add(resultNotice(loading ? "Loading…" : error, Theme.MUTED));
+            } else {
+                rows.addAll(searchResults.rows(expansion));
+                if (rows.isEmpty()) rows.add(resultNotice("No matches", Theme.FAINT));
             }
-            results.addView(children);
+        }
+        CardViews.reconcile(results, rows);
+    }
+
+    private TextView resultNotice(String text, int color) {
+        if (resultNotice == null) resultNotice = Widgets.text(this, "", color, 14, false);
+        Widgets.bindText(resultNotice, text);
+        if (resultNotice.getCurrentTextColor() != color) resultNotice.setTextColor(color);
+        return resultNotice;
+    }
+
+    /** Matching groups and their child cards survive ordinary query/data updates.
+     * All click handlers consult rebound models, never constructor-time snapshots. */
+    private final class SearchGroup {
+        final ProjectCards.Card card;
+        final LinearLayout children;
+        private Project project;
+
+        SearchGroup() {
+            card = new ProjectCards.Card(SearchActivity.this, SearchActivity.this::openProject,
+                    fresh -> { expansion.toggle(fresh); render(); },
+                    R.drawable.ic_collapse, "Collapse project", false);
+            children = Widgets.column(SearchActivity.this);
+            children.setPadding(Theme.dp(SearchActivity.this, 16), 0, 0, 0);
+        }
+
+        void bind(ProjectSearch.Group group, boolean expanded) {
+            project = group.project;
+            card.bindSummary(project, group.status, existence);
+            card.bindActionIcon(expanded ? R.drawable.ic_collapse : R.drawable.ic_expand,
+                    (expanded ? "Collapse " : "Expand ") + project.name);
+            // The coordinator retains collapsed children and rebinds before showing them.
+            int visibility = expanded && !group.sessions.isEmpty() ? View.VISIBLE : View.GONE;
+            if (children.getVisibility() != visibility) children.setVisibility(visibility);
         }
     }
 

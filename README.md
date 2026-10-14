@@ -263,6 +263,9 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `CatalogRepository.java`   | scoped catalog operations, existence ordering/retry, raw cache policy and background restoration |
 | `CatalogLoader.java`       | screen-owned cache/network coordination, per-resource freshness and lifecycle cancellation |
 | `CatalogJson.java`         | shared JSON decoders for network responses and cached catalogs |
+| `ProjectSearch.java`       | indexed project/session ownership, normalized query matching and expansion state |
+| `SearchResults.java`       | cached search matches and testable keyed result-row coordination |
+| `ProjectStatus.java`       | shared project badge policy; search computes summaries when catalog data changes |
 | `CatalogSnapshot.java` / `CatalogProgress.java` | completed refresh data and early catalog delivery |
 | `ResourceCache.java`       | bounded, server/auth-scoped raw-response cache; readers decode independent models |
 | `RefreshController.java`   | shared in-flight guard, queued action refresh and lifecycle callback cancellation |
@@ -447,6 +450,14 @@ project-scoped worktrees. Project/search screens never fetch worktrees, and chat
 fetches projects only when its project path is unknown. Worktree listing fetches
 sessions only for deletion confirmation and post-deletion refresh.
 There is no new WebSocket event.
+
+Search builds its ownership/text index and project status summaries when project
+or session catalogs change. Typing searches each project's already-grouped sessions;
+project badges summarize all owned sessions, not only matching children. Matching
+is separate from view binding: expansion, agent-label and directory-existence
+updates reuse current matches without rerunning the query. Project groups and
+session cards are rebound in place, with unchanged rows left attached. Filtering
+and view updates remain on the UI thread; no typing debounce is introduced.
 
 `CatalogRepository` owns scoped operations and cache policy; `Api` remains the
 HTTP transport. `CatalogLoader` coordinates restoration and refresh for each

@@ -32,6 +32,8 @@ final class ProjectCards {
 
     static final class Card extends LinearLayout {
         private final TextView name, status, missing, path, meta;
+        private final View actionButton;
+        private int actionIcon;
         private Project project;
 
         Card(Context context, Consumer<Project> open, Consumer<Project> action,
@@ -56,7 +58,7 @@ final class ProjectCards {
             missing = Widgets.tag(context, "missing", Theme.DANGER);
             Widgets.margins(missing, Theme.dp(context, 8), 0, 0, 0);
             head.addView(missing);
-            View actionButton;
+            this.actionIcon = actionIcon;
             if (actionIcon != 0) {
                 ImageButton icon = new ImageButton(context);
                 icon.setImageResource(actionIcon);
@@ -90,10 +92,25 @@ final class ProjectCards {
             } else meta = null;
         }
 
+        /** Search can change expansion state without replacing the card. */
+        void bindActionIcon(int icon, String description) {
+            if (actionIcon != icon && actionButton instanceof ImageButton) {
+                ((ImageButton) actionButton).setImageResource(icon);
+                actionIcon = icon;
+            }
+            if (!android.text.TextUtils.equals(actionButton.getContentDescription(), description)) {
+                actionButton.setContentDescription(description);
+            }
+        }
+
         void bind(Project fresh, List<Session> sessions, DirectorySnapshot existence) {
+            bindSummary(fresh, aggregateStatus(fresh, sessions), existence);
+        }
+
+        /** Search supplies a precomputed catalog summary; no session scan here. */
+        void bindSummary(Project fresh, String aggregate, DirectorySnapshot existence) {
             project = fresh;
             Widgets.bindText(name, fresh.name);
-            String aggregate = aggregateStatus(fresh, sessions);
             status.setVisibility(aggregate == null ? GONE : VISIBLE);
             if (aggregate != null) Widgets.bindStatusBadge(status, aggregate);
             boolean absent = existence.missing(fresh.path);
@@ -111,13 +128,6 @@ final class ProjectCards {
     }
 
     static String aggregateStatus(Project project, List<Session> sessions) {
-        if (sessions == null) return null;
-        boolean running = false;
-        for (Session session : sessions) {
-            if (!project.owns(session)) continue;
-            if ("awaiting_approval".equals(session.status)) return "awaiting_approval";
-            if ("running".equals(session.status)) running = true;
-        }
-        return running ? "running" : null;
+        return ProjectStatus.aggregate(project, sessions);
     }
 }

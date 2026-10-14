@@ -18,12 +18,16 @@ final class CardViews {
     }
 
     static void reconcile(LinearLayout container, List<? extends View> rows) {
-        reconcile(new Rows<View>() {
+        reconcile(rows(container), rows);
+    }
+
+    static Rows<View> rows(LinearLayout container) {
+        return new Rows<View>() {
             public int size() { return container.getChildCount(); }
             public View get(int index) { return container.getChildAt(index); }
             public void remove(int index) { container.removeViewAt(index); }
             public void add(int index, View row) { container.addView(row, index); }
-        }, rows);
+        };
     }
 
     /** Also exercised with a fake container to verify attachment operations in unit tests. */
