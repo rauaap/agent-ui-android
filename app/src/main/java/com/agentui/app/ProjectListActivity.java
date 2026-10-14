@@ -187,6 +187,12 @@ public class ProjectListActivity extends Activity {
             openUnscopedSessions();
             return;
         }
+        // Keep the populated Activity's attached cards on return. Cached JSON
+        // decoding and rendering are only needed for initial population.
+        if (lastProjects != null) {
+            refreshProjects(true);
+            return;
+        }
         existence = catalogs.cachedExistence();
         List<Project> cachedProjects = catalogs.cachedProjects();
         List<Session> cachedSessions = catalogs.cachedSessions();
