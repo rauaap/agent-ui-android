@@ -47,7 +47,7 @@ public class SessionListActivity extends Activity {
     private TextView sessionCount;
     private LinearLayout listContainer;
     private ForegroundPoller statusPoller;
-    private final RefreshController refresh = new RefreshController();
+    private CatalogLoader loader;
     private final RefreshController agentRefresh = new RefreshController();
     private CatalogRepository catalogs;
     private final KeyedCards<Session, SessionCards.Card> sessionCards = new KeyedCards<>();
@@ -92,6 +92,7 @@ public class SessionListActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         catalogs = new CatalogRepository(api);
+        loader = new CatalogLoader(catalogs);
         prefs = api.prefs();
         statusPoller = new ForegroundPoller(3000, this::pollSessionStatuses);
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
@@ -128,7 +129,7 @@ public class SessionListActivity extends Activity {
     @Override
     protected void onPause() {
         statusPoller.stop();
-        refresh.cancel();
+        loader.cancel();
         agentRefresh.cancel();
         super.onPause();
     }
@@ -237,69 +238,77 @@ public class SessionListActivity extends Activity {
 
     private void loadSessions() {
         if (!catalogs.identity().equals(dataIdentity)) {
-            refresh.cancel();
+            loader.cancel();
             agentRefresh.cancel();
             dataIdentity = catalogs.identity();
             lastSessions = null;
+            existence = DirectorySnapshot.unknown();
+            worktrees.clear();
             worktreesSupported = true;
             clearCards();
         }
         // A stopped Activity normally retains its cards. Do not decode cached
         // catalogs or rebuild those cards before the back transition can draw.
-        if (lastSessions != null) {
-            // Retry an interrupted/failed initial agent load without a synchronous
-            // cache hit. Otherwise keep the labels already used by the cards.
+        if (hasPopulatedData()) {
+            // Retry an interrupted/failed initial agent load. Otherwise keep the
+            // labels already used by the cards.
             if (agents.isEmpty()) loadAgents(false);
             refreshCatalogs(true);
             return;
         }
-        existence = catalogs.cachedExistence();
-        List<Worktree> cachedWorktrees = catalogs.cachedWorktrees(projectDir);
-        worktrees.clear();
-        if (cachedWorktrees != null) worktrees.addAll(cachedWorktrees);
-        List<Session> cachedSessions = catalogs.cachedSessions();
-        if (cachedSessions != null) renderList(scopeToProject(cachedSessions), null);
-        else sessionCount.setText("…");
+        sessionCount.setText("…");
         // Do not carry one server's registry into another after Settings changes
         // the address. Cards show raw ids until the fresh list lands.
         agents.clear();
         agentsError = null;
         loadAgents(true);
-        refreshCatalogs(true);
+        loader.restoreSessions(worktreeProjectPath(), sessionUpdates(true));
     }
 
     private DirectorySnapshot existence = DirectorySnapshot.unknown();
 
+    private boolean hasPopulatedData() { return lastSessions != null; }
+
     private void pollSessionStatuses() { refreshCatalogs(false); }
 
+    private String worktreeProjectPath() { return projectIsRepo && worktreesSupported ? projectDir : null; }
+
     private void refreshCatalogs(boolean reportError) {
-        refresh.start(reportError, run -> catalogs.sessions(
-                projectIsRepo && worktreesSupported ? projectDir : null,
-                run.progress(new CatalogProgress() {
-                    @Override public void sessions(List<Session> sessions) {
-                        List<Session> fresh = scopeToProject(sessions);
-                        // Binding refreshes action models too; unchanged fields do not
-                        // request layout, and unchanged rows remain attached.
-                        renderList(fresh, null);
-                    }
-                    @Override public void worktrees(List<Worktree> fresh) {
-                        boolean changed = worktreeRowsChanged(fresh);
-                        worktrees.clear();
-                        worktrees.addAll(fresh);
-                        if (changed && lastSessions != null) renderList(lastSessions, null);
-                    }
-                }), run.finish(new Api.Cb<CatalogSnapshot>() {
-                    @Override public void onResult(CatalogSnapshot snapshot) {
-                        boolean changed = !existence.paths.equals(snapshot.existence.paths)
-                                || (worktreesSupported && !snapshot.worktreesSupported);
-                        worktreesSupported &= snapshot.worktreesSupported;
-                        existence = snapshot.existence;
-                        if (changed && lastSessions != null) renderList(lastSessions, null);
-                    }
-                    @Override public void onError(String message) {
-                        if (reportError && lastSessions == null) renderList(null, message);
-                    }
-                })));
+        loader.refreshSessions(worktreeProjectPath(), reportError, sessionUpdates(reportError));
+    }
+
+    private CatalogLoader.Listener sessionUpdates(boolean reportError) {
+        return new CatalogLoader.Listener() {
+            @Override public void cached(CatalogRepository.CachedCatalog cached) {
+                if (cached.existence != null) existence = cached.existence;
+                if (cached.worktrees != null) {
+                    worktrees.clear();
+                    worktrees.addAll(cached.worktrees);
+                }
+                if (cached.sessions != null) renderList(scopeToProject(cached.sessions), null);
+                else if (hasPopulatedData()) renderList(lastSessions, null);
+            }
+            @Override public void sessions(List<Session> sessions) {
+                // Rebind fresh action models; unchanged views remain attached.
+                renderList(scopeToProject(sessions), null);
+            }
+            @Override public void worktrees(List<Worktree> fresh) {
+                boolean changed = worktreeRowsChanged(fresh);
+                worktrees.clear();
+                worktrees.addAll(fresh);
+                if (changed && hasPopulatedData()) renderList(lastSessions, null);
+            }
+            @Override public void onResult(CatalogSnapshot snapshot) {
+                boolean changed = !existence.paths.equals(snapshot.existence.paths)
+                        || (worktreesSupported && !snapshot.worktreesSupported);
+                worktreesSupported &= snapshot.worktreesSupported;
+                existence = snapshot.existence;
+                if (changed && hasPopulatedData()) renderList(lastSessions, null);
+            }
+            @Override public void onError(String message) {
+                if (reportError && !hasPopulatedData()) renderList(null, message);
+            }
+        };
     }
 
     private boolean worktreeRowsChanged(List<Worktree> fresh) {

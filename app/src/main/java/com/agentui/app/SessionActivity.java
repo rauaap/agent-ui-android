@@ -217,7 +217,8 @@ public class SessionActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         catalogs = new CatalogRepository(api);
-        existence = catalogs.cachedExistence();
+        metadataLoader = new CatalogLoader(catalogs);
+        metadataIdentity = catalogs.identity();
         sessionId = getIntent().getStringExtra(EXTRA_ID);
         sessionName = getIntent().getStringExtra(EXTRA_NAME);
         sessionAgent = getIntent().getStringExtra(EXTRA_AGENT);
@@ -249,7 +250,6 @@ public class SessionActivity extends Activity {
         input.setSelection(input.length());
         renderComposerImages();
         applyStatus(status);
-        restoreCachedMetadata();
         connect();
     }
 
@@ -285,15 +285,11 @@ public class SessionActivity extends Activity {
      */
     private DirectorySnapshot existence = DirectorySnapshot.unknown();
     private final ForegroundPoller metadataPoller = new ForegroundPoller(3000, this::refreshSessionMetadata);
-    private final RefreshController metadataRefresh = new RefreshController();
-
-    private void restoreCachedMetadata() {
-        java.util.List<Session> sessions = catalogs.cachedSessions();
-        if (sessions != null) applySessionMetadata(sessions);
-        java.util.List<Project> projects = catalogs.cachedProjects();
-        if (projects != null) resolveProjectPath(projects);
-        renderLocation();
-    }
+    private CatalogLoader metadataLoader;
+    /** Only a matching cached/REST session initializes metadata; Intent fields and
+     * transcript/socket content do not stand in for a complete metadata load. */
+    private boolean metadataInitialized;
+    private String metadataIdentity;
 
     private void resolveProjectPath(java.util.List<Project> projects) {
         if (projectDir != null) return;
@@ -309,6 +305,7 @@ public class SessionActivity extends Activity {
         for (Runnable view : directoryViews) view.run();
         for (Session session : sessions) {
             if (!session.id.equals(sessionId)) continue;
+            metadataInitialized = true;
             sessionName = session.name;
             nameView.setText(session.name);
             sessionAgent = session.agent;
@@ -331,23 +328,25 @@ public class SessionActivity extends Activity {
 
     private void refreshSessionMetadata() {
         if (sessionId == null || sessionId.isEmpty()) return;
-        metadataRefresh.start(false, run -> {
-            CatalogProgress progress = run.progress(new CatalogProgress() {
-                @Override public void sessions(java.util.List<Session> sessions) { applySessionMetadata(sessions); }
-            });
-            Api.Cb<CatalogSnapshot> result = run.finish(new Api.Cb<CatalogSnapshot>() {
-                @Override public void onResult(CatalogSnapshot snapshot) {
-                    existence = snapshot.existence;
-                    resolveProjectPath(snapshot.projects);
-                    renderLocation();
-                }
-                @Override public void onError(String message) {
-                    // The socket, intent and cached metadata leave the transcript usable.
-                }
-            });
-            if (projectDir == null) catalogs.projects(progress, result);
-            else catalogs.chat(progress, result);
-        });
+        metadataLoader.refreshTranscriptMetadata(projectDir, metadataUpdates());
+    }
+
+    private CatalogLoader.Listener metadataUpdates() {
+        return new CatalogLoader.Listener() {
+            @Override public void cached(CatalogRepository.CachedCatalog cached) {
+                if (cached.existence != null) existence = cached.existence;
+                if (cached.sessions != null) applySessionMetadata(cached.sessions);
+                if (cached.projects != null) resolveProjectPath(cached.projects);
+                renderLocation();
+            }
+            @Override public void sessions(java.util.List<Session> sessions) { applySessionMetadata(sessions); }
+            @Override public void onResult(CatalogSnapshot snapshot) {
+                existence = snapshot.existence;
+                resolveProjectPath(snapshot.projects);
+                renderLocation();
+            }
+            // The socket, intent and cached metadata leave the transcript usable on error.
+        };
     }
 
     @Override
@@ -359,7 +358,16 @@ public class SessionActivity extends Activity {
         loadAgents();
         fileSocketWanted = true;
         connectFileSocket();
-        refreshSessionMetadata();
+        if (!catalogs.identity().equals(metadataIdentity)) {
+            metadataLoader.cancel();
+            metadataIdentity = catalogs.identity();
+            metadataInitialized = false;
+            existence = DirectorySnapshot.unknown();
+        }
+        if (sessionId != null && !sessionId.isEmpty()) {
+            if (metadataInitialized) refreshSessionMetadata();
+            else metadataLoader.restoreTranscriptMetadata(projectDir, metadataUpdates());
+        }
     }
 
     private void saveComposerDraft() {
@@ -380,7 +388,7 @@ public class SessionActivity extends Activity {
     @Override
     protected void onStop() {
         metadataPoller.stop();
-        metadataRefresh.cancel();
+        metadataLoader.cancel();
         agentRefresh.cancel();
         saveComposerDraft();
         WatchService.clearViewing(sessionId);
@@ -1446,6 +1454,7 @@ public class SessionActivity extends Activity {
         firstConnect = false;
         switch (type) {
             case "status":
+                metadataLoader.sessionMetadataChanged();
                 SessionState.get(api, sessionId).status(msg.optString("status", "idle"));
                 // The server sends this right after the replay finishes, so it's
                 // the cue to swap a buffered reconnect in for the old scrollback.
@@ -1454,6 +1463,7 @@ public class SessionActivity extends Activity {
                 applyStatus(msg.optString("status", "idle"));
                 break;
             case "settings":
+                metadataLoader.sessionMetadataChanged();
                 SessionState.get(api, sessionId).settings(msg);
                 // Toggles may change from another client; keep our cache fresh so
                 // the settings screen opens with the right state.
@@ -1463,6 +1473,7 @@ public class SessionActivity extends Activity {
                         autoApproveInterAgent);
                 break;
             case "reasoning_level":
+                metadataLoader.sessionMetadataChanged();
                 SessionState.get(api, sessionId).reasoningLevel(msg.optString("reasoning_level"));
                 break;
             case "input":

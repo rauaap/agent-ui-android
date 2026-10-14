@@ -7,6 +7,16 @@ import java.util.Map;
 import static org.junit.Assert.*;
 
 public class CatalogRepositoryTest {
+    private static CatalogRepository.CachedCatalog cached(CatalogRepository repository, String path) {
+        CatalogRepository.CachedCatalog[] result = {null};
+        Api.Cb<CatalogRepository.CachedCatalog> callback = new Api.Cb<CatalogRepository.CachedCatalog>() {
+            public void onResult(CatalogRepository.CachedCatalog value) { result[0] = value; }
+            public void onError(String message) { fail(message); }
+        };
+        if (path == null) repository.restoreProjects(callback);
+        else repository.restoreSessions(path, callback);
+        return result[0];
+    }
     static class Source implements CatalogRepository.Source {
         final List<String> calls = new ArrayList<>();
         final Project project = new Project("p", "/app", "App", 1, "", true);
@@ -16,7 +26,7 @@ public class CatalogRepositoryTest {
         Api.Cb<List<Worktree>> worktrees;
         Api.Cb<List<Session>> sessions;
         Api.Cb<DirectorySnapshot> existence;
-        final CatalogRepository repository = new CatalogRepository(this, () -> "source", () -> 0L);
+        final CatalogRepository repository = new CatalogRepository(this, () -> "source", () -> 0L, Runnable::run, Runnable::run);
         public void listAgents(Api.Cb<List<Agent>> cb) { calls.add("agents"); cb.onResult(List.of()); }
         public void listProjects(Api.Cb<List<Project>> cb) { calls.add("projects"); projects = cb; }
         public void listWorktrees(String path, Api.Cb<List<Worktree>> cb) {
@@ -141,26 +151,27 @@ public class CatalogRepositoryTest {
     @Test public void cachePolicyLivesInTheRepositoryAndReadersAreIndependent() {
         Source source = new Source();
         String identity = "cache-policy";
-        CatalogRepository repository = new CatalogRepository(source, () -> identity, () -> 100L);
+        CatalogRepository repository = new CatalogRepository(source, () -> identity, () -> 100L,
+                Runnable::run, Runnable::run);
         CatalogRepository.observeResponse(identity, "GET", "/sessions", () -> 100L).accept(
                 "[{\"id\":1,\"working_dir\":\"/worktree\",\"worktree_id\":null}]");
         CatalogRepository.observeResponse(identity, "GET", "/directory-existence", () -> 100L)
                 .accept("{\"/worktree\":false}");
-        Session first = repository.cachedSessions().get(0);
+        Session first = cached(repository, null).sessions.get(0);
         first.workingDir = "/changed-by-another-screen";
-        assertEquals("/worktree", repository.cachedSessions().get(0).workingDir);
-        assertTrue(repository.cachedExistence().missing("/worktree"));
+        assertEquals("/worktree", cached(repository, null).sessions.get(0).workingDir);
+        assertTrue(cached(repository, null).existence.missing("/worktree"));
 
         CatalogRepository.observeResponse(identity, "PATCH", "/sessions/1", () -> 100L).accept("{}");
-        assertNull(repository.cachedSessions());
-        assertTrue(repository.cachedExistence().missing("/worktree"));
+        assertNull(cached(repository, null).sessions);
+        assertTrue(cached(repository, null).existence.missing("/worktree"));
         CatalogRepository.observeResponse(identity, "DELETE", "/worktrees/2", () -> 100L).accept("{}");
-        assertFalse(repository.cachedExistence().missing("/worktree"));
-        assertFalse(repository.cachedExistence().paths.containsKey("/worktree"));
+        assertNull(cached(repository, null).existence);
     }
     @Test public void repositoryCachesStableAgentsOnlyUntilTheirFreshnessDeadline() {
         Source source = new Source(); String identity = "cached-agents"; long[] now = {100L};
-        CatalogRepository repository = new CatalogRepository(source, () -> identity, () -> now[0]);
+        CatalogRepository repository = new CatalogRepository(source, () -> identity, () -> now[0],
+                Runnable::run, Runnable::run);
         CatalogRepository.observeResponse(identity, "GET", "/agents", () -> now[0]).accept("[]");
         Api.Cb<List<Agent>> result = new Api.Cb<List<Agent>>() {
             public void onResult(List<Agent> value) { assertTrue(value.isEmpty()); }
@@ -172,13 +183,14 @@ public class CatalogRepositoryTest {
     }
     @Test public void repositoryRejectsPreMutationResponsesAndKeepsProjectScopesSeparate() {
         Source source = new Source(); String identity = "cache-race";
-        CatalogRepository repository = new CatalogRepository(source, () -> identity, () -> 100L);
+        CatalogRepository repository = new CatalogRepository(source, () -> identity, () -> 100L,
+                Runnable::run, Runnable::run);
         java.util.function.Consumer<String> stale = CatalogRepository.observeResponse(identity, "GET", "/sessions", () -> 100L);
         CatalogRepository.observeResponse(identity, "DELETE", "/worktrees/1", () -> 100L).accept("{}");
-        stale.accept("[]"); assertNull(repository.cachedSessions());
+        stale.accept("[]"); assertNull(cached(repository, null).sessions);
         CatalogRepository.observeResponse(identity, "GET", "/worktrees?project_path=%2Fapp", () -> 100L).accept("[]");
-        assertNotNull(repository.cachedWorktrees("/app"));
-        assertNull(repository.cachedWorktrees("/other"));
+        assertNotNull(cached(repository, "/app").worktrees);
+        assertNull(cached(repository, "/other").worktrees);
     }
     @Test public void unsupportedWorktreesAndExistenceRemainUnknown() {
         Source source = new Source(); Result result = new Result();

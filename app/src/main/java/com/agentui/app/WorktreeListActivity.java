@@ -35,7 +35,9 @@ public class WorktreeListActivity extends Activity {
 
     private Api api;
     private final ForegroundPoller poller = new ForegroundPoller(3000, this::loadWorktrees);
-    private final RefreshController refresh = new RefreshController();
+    private CatalogLoader loader;
+    private String dataIdentity;
+    private List<Worktree> lastWorktrees;
     private final RefreshController actions = new RefreshController();
     private CatalogRepository catalogs;
     private String projectDir;
@@ -51,6 +53,7 @@ public class WorktreeListActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         catalogs = new CatalogRepository(api);
+        loader = new CatalogLoader(catalogs);
         projectDir = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
         projectName = getIntent().getStringExtra(EXTRA_PROJECT_NAME);
         if (projectDir == null) {
@@ -69,7 +72,7 @@ public class WorktreeListActivity extends Activity {
 
     @Override protected void onPause() {
         poller.stop();
-        refresh.cancel();
+        loader.cancel();
         actions.cancel();
         super.onPause();
     }
@@ -137,41 +140,60 @@ public class WorktreeListActivity extends Activity {
     /* ---------------------------------------------------------------- */
 
     private void load() {
-        existence = catalogs.cachedExistence();
-        List<Worktree> cached = catalogs.cachedWorktrees(projectDir);
-        if (cached != null) render(cached, null);
-        else worktreeCount.setText("…");
-        loadWorktrees();
+        if (!catalogs.identity().equals(dataIdentity)) {
+            loader.cancel();
+            dataIdentity = catalogs.identity();
+            lastWorktrees = null;
+            sessions.clear();
+            existence = DirectorySnapshot.unknown();
+            listContainer.removeAllViews();
+        }
+        if (hasPopulatedData()) loadWorktrees();
+        else {
+            worktreeCount.setText("…");
+            loader.restoreWorktrees(projectDir, worktreeUpdates(false));
+        }
     }
+
+    private boolean hasPopulatedData() { return lastWorktrees != null; }
 
     private DirectorySnapshot existence = DirectorySnapshot.unknown();
 
     private void loadWorktrees() { refreshWorktrees(false); }
 
     private void refreshWorktrees(boolean afterRemoval) {
-        refresh.start(afterRemoval, run -> {
-            Api.Cb<CatalogSnapshot> result = run.finish(new Api.Cb<CatalogSnapshot>() {
-                @Override public void onResult(CatalogSnapshot snapshot) {
-                    sessions = snapshot.sessions;
-                    existence = snapshot.existence;
-                    render(snapshot.worktrees, null);
-                }
-                @Override public void onError(String message) { render(null, message); }
-            });
-            if (afterRemoval) catalogs.removal(projectDir, run.progress(new CatalogProgress() {}), result);
-            else catalogs.worktrees(projectDir, run.progress(new CatalogProgress() {
-                @Override public void worktrees(List<Worktree> worktrees) { render(worktrees, null); }
-            }), result);
-        });
+        if (afterRemoval) loader.refreshAfterRemoval(projectDir, worktreeUpdates(true));
+        else loader.refreshWorktrees(projectDir, worktreeUpdates(false));
+    }
+
+    private CatalogLoader.Listener worktreeUpdates(boolean afterRemoval) {
+        return new CatalogLoader.Listener() {
+            @Override public void cached(CatalogRepository.CachedCatalog cached) {
+                if (cached.existence != null) existence = cached.existence;
+                List<Worktree> rows = cached.worktrees != null ? cached.worktrees : lastWorktrees;
+                if (rows != null) render(rows, null);
+            }
+            @Override public void worktrees(List<Worktree> worktrees) {
+                if (!afterRemoval) render(worktrees, null);
+            }
+            @Override public void onResult(CatalogSnapshot snapshot) {
+                sessions = snapshot.sessions;
+                existence = snapshot.existence;
+                render(snapshot.worktrees, null);
+            }
+            @Override public void onError(String message) { render(null, message); }
+        };
     }
 
     private void render(List<Worktree> worktrees, String error) {
         listContainer.removeAllViews();
         if (error != null) {
+            lastWorktrees = null;
             worktreeCount.setText("unreachable");
             listContainer.addView(emptyBox(error));
             return;
         }
+        lastWorktrees = worktrees;
         int n = worktrees.size();
         worktreeCount.setText(n + (n == 1 ? " worktree" : " worktrees"));
         if (n == 0) {

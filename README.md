@@ -260,7 +260,9 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WatchService.java`        | foreground service: per-session WebSocket watch + task-completion notifications |
 | `Prefs.java`               | `SharedPreferences`-backed server config |
 | `Api.java`                 | OkHttp REST transport; reports successful responses without owning cache policy |
-| `CatalogRepository.java`   | explicit project/session/chat/worktree refresh operations, existence ordering/retry, cache freshness and invalidation |
+| `CatalogRepository.java`   | scoped catalog operations, existence ordering/retry, raw cache policy and background restoration |
+| `CatalogLoader.java`       | screen-owned cache/network coordination, per-resource freshness and lifecycle cancellation |
+| `CatalogJson.java`         | shared JSON decoders for network responses and cached catalogs |
 | `CatalogSnapshot.java` / `CatalogProgress.java` | completed refresh data and early catalog delivery |
 | `ResourceCache.java`       | bounded, server/auth-scoped raw-response cache; readers decode independent models |
 | `RefreshController.java`   | shared in-flight guard, queued action refresh and lifecycle callback cancellation |
@@ -429,9 +431,16 @@ returns, without waiting for worktrees or existence. Absent keys mean unknown,
 not missing; a concurrent catalog change triggers one bounded retry.
 
 Fetched catalogs and existence are cached in memory by server and authentication
-identity and reused immediately on navigation while fresh data loads. Mutable
-models are decoded separately for each reader. Agents are reused for up to one
-minute. Catalog mutations invalidate affected cached catalogs; directory creation
+identity. On initial population, cached JSON is decoded on a shared background
+executor while network requests start immediately. Both paths use `CatalogJson`;
+only publication and view updates run on the UI thread. Mutable models are decoded
+separately for each reader. Fresh network results supersede cached results per
+resource, so fresh sessions do not discard useful cached projects or existence.
+Populated lists retain their data on return and only refresh from the network.
+Transcript metadata uses an explicit initialization flag: interrupted restoration
+is retried on return until a matching cached or REST session has been applied.
+Conversation content is separate and arrives through WebSocket replay. Agents
+are reused for up to one minute. Catalog mutations invalidate affected cached catalogs; directory creation
 or removal also invalidates existence. Foreground project/session/worktree/chat
 polling refreshes current data every three seconds; session polling includes
 project-scoped worktrees. Project/search screens never fetch worktrees, and chat
@@ -439,12 +448,15 @@ fetches projects only when its project path is unknown. Worktree listing fetches
 sessions only for deletion confirmation and post-deletion refresh.
 There is no new WebSocket event.
 
-`CatalogRepository` owns the screen-specific operations and cache policy;
-`Api` remains the HTTP transport. `RefreshController` owns each activity's
-in-flight refresh and one queued action refresh. Pausing an activity suppresses
-late publications and further existence/retry requests; an already-started HTTP
-request may still finish and warm the cache. Pre-mutation responses cannot refill
-invalidated cache entries.
+`CatalogRepository` owns scoped operations and cache policy; `Api` remains the
+HTTP transport. `CatalogLoader` coordinates restoration and refresh for each
+screen, using `RefreshController` for its in-flight guard and one queued action
+refresh. Activities own rendering and cancel their loader on leaving the foreground
+(on pause for lists/search, on stop for transcript metadata). Cancellation suppresses
+late publications and further existence/retry requests; already-started decoding
+or HTTP requests may still finish, and HTTP responses can warm the cache.
+Server changes and mutations invalidate pending restoration. Pre-mutation
+responses cannot refill invalidated cache entries.
 
 `POST /worktrees` body: `{ project_path, path, branch }` — runs
 `git worktree add -b <branch> <path>`, always cutting a **new** branch off the

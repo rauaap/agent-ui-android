@@ -24,7 +24,10 @@ import static com.agentui.app.Widgets.lp;
 public class SearchActivity extends Activity {
     private Api api;
     private CatalogRepository catalogs;
-    private final RefreshController refresh = new RefreshController();
+    private CatalogLoader loader;
+    private String dataIdentity;
+    private boolean projectsInitialized;
+    private boolean sessionsInitialized;
     private final RefreshController agentRefresh = new RefreshController();
     private EditText query;
     private LinearLayout results;
@@ -40,6 +43,7 @@ public class SearchActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         catalogs = new CatalogRepository(api);
+        loader = new CatalogLoader(catalogs);
         setContentView(buildRoot());
         if (savedInstanceState != null) {
             expansion.restore(savedInstanceState.getStringArrayList("collapsed_projects"));
@@ -59,7 +63,7 @@ public class SearchActivity extends Activity {
     }
 
     @Override protected void onPause() {
-        refresh.cancel();
+        loader.cancel();
         agentRefresh.cancel();
         super.onPause();
     }
@@ -120,41 +124,46 @@ public class SearchActivity extends Activity {
     private DirectorySnapshot existence = DirectorySnapshot.unknown();
 
     private void load() {
-        refresh.cancel();
+        loader.cancel();
         agentRefresh.cancel();
-        existence = catalogs.cachedExistence();
-        List<Project> cachedProjects = catalogs.cachedProjects();
-        List<Session> cachedSessions = catalogs.cachedSessions();
-        if (cachedProjects != null) projects = cachedProjects;
-        if (cachedSessions != null) sessions = cachedSessions;
-        boolean[] loaded = {cachedProjects != null, cachedSessions != null};
-        loading = !loaded[0] || !loaded[1];
+        if (!catalogs.identity().equals(dataIdentity)) {
+            dataIdentity = catalogs.identity();
+            projectsInitialized = sessionsInitialized = false;
+            projects = Collections.emptyList();
+            sessions = Collections.emptyList();
+            existence = DirectorySnapshot.unknown();
+            agents = Collections.emptyList();
+        }
+        loading = !hasPopulatedData();
         error = null;
-        agents = Collections.emptyList();
         render();
-        refresh.start(false, run -> catalogs.projects(run.progress(new CatalogProgress() {
+        CatalogLoader.Listener updates = new CatalogLoader.Listener() {
+            @Override public void cached(CatalogRepository.CachedCatalog cached) {
+                if (cached.existence != null) existence = cached.existence;
+                if (cached.projects != null) { projects = cached.projects; projectsInitialized = true; }
+                if (cached.sessions != null) { sessions = cached.sessions; sessionsInitialized = true; }
+                contentUpdated();
+            }
             @Override public void projects(List<Project> list) {
-                projects = list; loaded[0] = true;
-                loading = !loaded[1]; render();
+                projects = list; projectsInitialized = true;
+                contentUpdated();
             }
             @Override public void sessions(List<Session> list) {
-                sessions = list; loaded[1] = true;
-                loading = !loaded[0]; render();
+                sessions = list; sessionsInitialized = true;
+                contentUpdated();
             }
-        }), run.finish(new Api.Cb<CatalogSnapshot>() {
             @Override public void onResult(CatalogSnapshot snapshot) {
-                projects = snapshot.projects;
-                sessions = snapshot.sessions;
                 existence = snapshot.existence;
-                loading = false;
-                render();
+                contentUpdated();
             }
             @Override public void onError(String message) {
                 loading = false;
-                if (!loaded[0] || !loaded[1]) error = "Unable to search: " + message;
+                if (!hasPopulatedData()) error = "Unable to search: " + message;
                 render();
             }
-        })));
+        };
+        if (hasPopulatedData()) loader.refreshProjects(false, updates);
+        else loader.restoreProjects(updates);
         agentRefresh.start(false, run -> catalogs.agents(run.finish(new Api.Cb<List<Agent>>() {
             @Override public void onResult(List<Agent> list) {
                 agents = list;
@@ -162,6 +171,14 @@ public class SearchActivity extends Activity {
             }
             @Override public void onError(String message) { /* Fall back to raw ids. */ }
         })));
+    }
+
+    private boolean hasPopulatedData() { return projectsInitialized && sessionsInitialized; }
+
+    private void contentUpdated() {
+        loading = !hasPopulatedData();
+        if (!loading) error = null;
+        render();
     }
 
     private void render() {

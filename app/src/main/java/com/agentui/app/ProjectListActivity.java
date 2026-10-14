@@ -35,7 +35,7 @@ public class ProjectListActivity extends Activity {
     private ForegroundPoller statusPoller;
     private List<Project> lastProjects;
     private List<Session> lastSessions;
-    private final RefreshController refresh = new RefreshController();
+    private CatalogLoader loader;
     private CatalogRepository catalogs;
     private final KeyedCards<Project, ProjectCards.Card> projectCards = new KeyedCards<>();
 
@@ -47,6 +47,7 @@ public class ProjectListActivity extends Activity {
         super.onCreate(savedInstanceState);
         api = new Api(this);
         catalogs = new CatalogRepository(api);
+        loader = new CatalogLoader(catalogs);
         prefs = api.prefs();
         statusPoller = new ForegroundPoller(3000, this::pollProjectStatuses);
         setContentView(buildRoot());
@@ -75,7 +76,7 @@ public class ProjectListActivity extends Activity {
     @Override
     protected void onPause() {
         statusPoller.stop();
-        refresh.cancel();
+        loader.cancel();
         super.onPause();
     }
 
@@ -177,10 +178,11 @@ public class ProjectListActivity extends Activity {
 
     private void loadProjects() {
         if (!catalogs.identity().equals(dataIdentity)) {
-            refresh.cancel();
+            loader.cancel();
             dataIdentity = catalogs.identity();
             lastProjects = null;
             lastSessions = null;
+            existence = DirectorySnapshot.unknown();
             legacyServer = false;
             clearCards();
         }
@@ -190,22 +192,30 @@ public class ProjectListActivity extends Activity {
         }
         // Keep the populated Activity's attached cards on return. Cached JSON
         // decoding and rendering are only needed for initial population.
-        if (lastProjects != null) {
+        if (hasPopulatedData()) {
             refreshProjects(true);
             return;
         }
-        existence = catalogs.cachedExistence();
-        List<Project> cachedProjects = catalogs.cachedProjects();
-        List<Session> cachedSessions = catalogs.cachedSessions();
-        if (cachedProjects != null) renderList(cachedProjects, cachedSessions, null);
-        else projectCount.setText("…");
-        refreshProjects(true);
+        projectCount.setText("…");
+        loader.restoreProjects(projectUpdates(true));
     }
 
-    private void pollProjectStatuses() { if (lastProjects != null) refreshProjects(false); }
+    private boolean hasPopulatedData() { return lastProjects != null; }
+
+    private void pollProjectStatuses() { if (hasPopulatedData()) refreshProjects(false); }
 
     private void refreshProjects(boolean reportError) {
-        refresh.start(reportError, run -> catalogs.projects(run.progress(new CatalogProgress() {
+        loader.refreshProjects(reportError, projectUpdates(reportError));
+    }
+
+    private CatalogLoader.Listener projectUpdates(boolean reportError) {
+        return new CatalogLoader.Listener() {
+            @Override public void cached(CatalogRepository.CachedCatalog cached) {
+                if (cached.existence != null) existence = cached.existence;
+                if (cached.sessions != null) lastSessions = cached.sessions;
+                List<Project> projects = cached.projects != null ? cached.projects : lastProjects;
+                if (projects != null) renderList(projects, lastSessions, null);
+            }
             @Override public void projects(List<Project> projects) {
                 if (reportError) renderList(projects, lastSessions, null);
             }
@@ -214,7 +224,6 @@ public class ProjectListActivity extends Activity {
                 if (lastProjects != null) renderList(lastProjects, sessions, null);
                 else lastSessions = sessions;
             }
-        }), run.finish(new Api.StatusCb<CatalogSnapshot>() {
             @Override public void onResult(CatalogSnapshot snapshot) {
                 existence = snapshot.existence;
                 // Rebind fresh action models as well as visible fields. Unchanged
@@ -231,7 +240,7 @@ public class ProjectListActivity extends Activity {
                     openUnscopedSessions();
                 } else renderList(null, null, message);
             }
-        })));
+        };
     }
 
     /** Back-compat path: hand over to the unscoped session list and step aside. */

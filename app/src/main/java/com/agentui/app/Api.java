@@ -116,7 +116,7 @@ final class Api {
      */
     void listAgents(Cb<List<Agent>> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/agents").get().build();
-        enqueue(req, cb, body -> Agent.list(new JSONArray(body)));
+        enqueue(req, cb, CatalogJson::agents);
     }
 
     /**
@@ -192,17 +192,12 @@ final class Api {
 
     void directoryExistence(Cb<DirectorySnapshot> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/directory-existence").get().build();
-        enqueue(req, cb, body -> DirectorySnapshot.from(new JSONObject(body)));
+        enqueue(req, cb, CatalogJson::existence);
     }
 
     void listProjects(Cb<List<Project>> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/projects").get().build();
-        enqueue(req, cb, body -> {
-            List<Project> out = new ArrayList<>();
-            JSONArray arr = new JSONArray(body);
-            for (int i = 0; i < arr.length(); i++) out.add(Project.from(arr.getJSONObject(i)));
-            return out;
-        });
+        enqueue(req, cb, CatalogJson::projects);
     }
 
     /** Creates the project row and its directory; harmless if both exist. */
@@ -277,12 +272,7 @@ final class Api {
         if (projectPath != null) builder.addQueryParameter("project_path", projectPath);
         HttpUrl url = builder.build();
         Request req = new Request.Builder().url(url).get().build();
-        enqueue(req, cb, body -> {
-            List<Worktree> out = new ArrayList<>();
-            JSONArray arr = new JSONArray(body);
-            for (int i = 0; i < arr.length(); i++) out.add(Worktree.from(arr.getJSONObject(i)));
-            return out;
-        });
+        enqueue(req, cb, CatalogJson::worktrees);
     }
 
     /**
@@ -328,12 +318,7 @@ final class Api {
 
     void listSessions(Cb<List<Session>> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/sessions").get().build();
-        enqueue(req, cb, body -> {
-            List<Session> out = new ArrayList<>();
-            JSONArray arr = new JSONArray(body);
-            for (int i = 0; i < arr.length(); i++) out.add(Session.from(arr.getJSONObject(i)));
-            return out;
-        });
+        enqueue(req, cb, CatalogJson::sessions);
     }
 
     /**

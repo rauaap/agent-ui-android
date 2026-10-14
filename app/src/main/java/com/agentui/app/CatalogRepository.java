@@ -1,11 +1,8 @@
 package com.agentui.app;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import okhttp3.HttpUrl;
@@ -21,11 +18,22 @@ final class CatalogRepository {
     }
     private static final ResourceCache CACHE = new ResourceCache();
     static { Api.setResponseObserver(CatalogRepository::observeResponse); }
+    private static final java.util.concurrent.Executor DECODER =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread thread = new Thread(r, "catalog-cache-decoder");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private final java.util.concurrent.Executor decoder;
+    private final java.util.concurrent.Executor delivery;
     private final Source source;
     private final Supplier<String> identity;
     private final LongSupplier clock;
 
     CatalogRepository(Api api) {
+        decoder = DECODER;
+        android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+        delivery = task -> main.post(task);
         identity = api::serverIdentity;
         clock = android.os.SystemClock::elapsedRealtime;
         source = new Source() {
@@ -36,41 +44,92 @@ final class CatalogRepository {
             public void listAgents(Api.Cb<List<Agent>> cb) { api.listAgents(cb); }
         };
     }
-    CatalogRepository(Source source, Supplier<String> identity, LongSupplier clock) {
+    CatalogRepository(Source source, Supplier<String> identity, LongSupplier clock,
+                      java.util.concurrent.Executor decoder, java.util.concurrent.Executor delivery) {
         this.source = source; this.identity = identity; this.clock = clock;
+        this.decoder = decoder; this.delivery = delivery;
     }
     String identity() { return identity.get(); }
 
     private interface Parser<T> { T parse(String body) throws Exception; }
-    private <T> T cached(String resource, long maxAge, Parser<T> parser) {
-        String body = CACHE.get(identity(), resource, clock.getAsLong(), maxAge);
+    private String cachedBody(String resource, long maxAge) {
+        return CACHE.get(identity(), resource, clock.getAsLong(), maxAge);
+    }
+    private static <T> T decode(String body, Parser<T> parser) {
         if (body == null) return null;
         try { return parser.parse(body); } catch (Exception ignored) { return null; }
     }
-    private static <T> List<T> decodeList(String body, Function<JSONObject, T> decode) throws Exception {
-        List<T> result = new ArrayList<>();
-        JSONArray array = new JSONArray(body);
-        for (int i = 0; i < array.length(); i++) result.add(decode.apply(array.getJSONObject(i)));
-        return result;
+
+    /** Capture raw responses on the owner thread; only decoding runs in the worker.
+     * CatalogLoader owns lifecycle cancellation and per-resource freshness. */
+    private <T> void decodeAsync(Supplier<T> parse, Api.Cb<T> cb) {
+        String server = identity();
+        long version = CACHE.version(server);
+        decoder.execute(() -> {
+            T value = parse.get();
+            delivery.execute(() -> {
+                if (!server.equals(identity()) || version != CACHE.version(server)) {
+                    cb.onError("Cached catalog changed");
+                    return;
+                }
+                cb.onResult(value);
+            });
+        });
     }
-    List<Project> cachedProjects() { return cached("/projects", Long.MAX_VALUE, b -> decodeList(b, Project::from)); }
-    List<Session> cachedSessions() { return cached("/sessions", Long.MAX_VALUE, b -> decodeList(b, Session::from)); }
-    List<Worktree> cachedWorktrees(String path) {
-        HttpUrl.Builder url = HttpUrl.get("http://cache.invalid/worktrees").newBuilder();
-        if (path != null) url.addQueryParameter("project_path", path);
-        String query = url.build().encodedQuery();
-        return cached("/worktrees" + (query == null ? "" : "?" + query), Long.MAX_VALUE,
-                b -> decodeList(b, Worktree::from));
+    /** Partial restoration: null means absent, malformed, or superseded. Consumers
+     * merge only non-null resources; an empty list is still valid cached data. */
+    static final class CachedCatalog {
+        final List<Project> projects;
+        final List<Session> sessions;
+        final List<Worktree> worktrees;
+        final DirectorySnapshot existence;
+        CachedCatalog(List<Project> projects, List<Session> sessions, List<Worktree> worktrees,
+                      DirectorySnapshot existence) {
+            this.projects = projects; this.sessions = sessions; this.worktrees = worktrees;
+            this.existence = existence;
+        }
+        boolean hasData() {
+            return projects != null || sessions != null || worktrees != null || existence != null;
+        }
     }
-    DirectorySnapshot cachedExistence() {
-        DirectorySnapshot snapshot = cached("/directory-existence", Long.MAX_VALUE,
-                b -> DirectorySnapshot.from(new JSONObject(b)));
-        return snapshot == null ? DirectorySnapshot.unknown() : snapshot;
+
+    void restoreProjects(Api.Cb<CachedCatalog> cb) { restore(CachePlan.PROJECTS, null, cb); }
+    void restoreSessions(String projectPath, Api.Cb<CachedCatalog> cb) { restore(CachePlan.SESSIONS, projectPath, cb); }
+    void restoreWorktrees(String projectPath, Api.Cb<CachedCatalog> cb) { restore(CachePlan.WORKTREES, projectPath, cb); }
+    void restoreTranscriptMetadata(Api.Cb<CachedCatalog> cb) { restore(CachePlan.TRANSCRIPT, null, cb); }
+
+    private enum CachePlan { PROJECTS, SESSIONS, WORKTREES, TRANSCRIPT }
+
+    /** Missing/malformed resources stay null, distinct from cached empty/unknown data. */
+    private void restore(CachePlan plan, String worktreePath, Api.Cb<CachedCatalog> cb) {
+        String projectBody = plan == CachePlan.PROJECTS || plan == CachePlan.TRANSCRIPT
+                ? cachedBody("/projects", Long.MAX_VALUE) : null;
+        String sessionBody = plan != CachePlan.WORKTREES ? cachedBody("/sessions", Long.MAX_VALUE) : null;
+        String worktreeBody = null;
+        if (worktreePath != null) {
+            HttpUrl url = HttpUrl.get("http://cache.invalid/worktrees").newBuilder()
+                    .addQueryParameter("project_path", worktreePath).build();
+            worktreeBody = cachedBody("/worktrees?" + url.encodedQuery(), Long.MAX_VALUE);
+        }
+        String trees = worktreeBody;
+        String existenceBody = cachedBody("/directory-existence", Long.MAX_VALUE);
+        decodeAsync(() -> new CachedCatalog(
+                decode(projectBody, CatalogJson::projects),
+                decode(sessionBody, CatalogJson::sessions),
+                decode(trees, CatalogJson::worktrees),
+                decode(existenceBody, CatalogJson::existence)), cb);
     }
+
     void agents(Api.Cb<List<Agent>> cb) {
-        List<Agent> agents = cached("/agents", 60_000, b -> Agent.list(new JSONArray(b)));
-        if (agents != null) cb.onResult(agents);
-        else source.listAgents(cb);
+        String body = cachedBody("/agents", 60_000);
+        if (body == null) { source.listAgents(cb); return; }
+        decodeAsync(() -> decode(body, CatalogJson::agents), new Api.Cb<List<Agent>>() {
+            public void onResult(List<Agent> agents) {
+                if (agents != null) cb.onResult(agents);
+                else source.listAgents(cb);
+            }
+            public void onError(String message) { cb.onError(message); }
+        });
     }
 
     /** All Api instances notify this policy, including mutations from settings and forms. */
