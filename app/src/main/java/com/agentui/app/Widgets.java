@@ -48,6 +48,14 @@ final class Widgets {
     /** A pill-shaped status badge coloured per status, like the web .status-badge. */
     static TextView statusBadge(Context ctx, String status) {
         TextView t = new TextView(ctx);
+        bindStatusBadge(t, status);
+        return t;
+    }
+
+    static void bindStatusBadge(TextView t, String status) {
+        if (status.equals(t.getTag())) return;
+        t.setTag(status);
+        Context ctx = t.getContext();
         int fg = statusColor(status);
         int fill;
         int stroke;
@@ -72,7 +80,11 @@ final class Widgets {
         int padH = Theme.dp(ctx, 10);
         int padV = Theme.dp(ctx, 4);
         t.setPadding(padH, padV, padH, padV);
-        return t;
+    }
+
+    /** Avoid requesting layout for identical content during background refreshes. */
+    static void bindText(TextView view, CharSequence text) {
+        if (!android.text.TextUtils.equals(view.getText(), text)) view.setText(text);
     }
 
     static int statusColor(String status) {

@@ -37,6 +37,7 @@ public class ProjectListActivity extends Activity {
     private List<Session> lastSessions;
     private final RefreshController refresh = new RefreshController();
     private CatalogRepository catalogs;
+    private final KeyedCards<Project, ProjectCards.Card> projectCards = new KeyedCards<>();
 
     /** Set once a server 404s on /projects, so we stop probing it every resume. */
     private boolean legacyServer;
@@ -181,7 +182,7 @@ public class ProjectListActivity extends Activity {
             lastProjects = null;
             lastSessions = null;
             legacyServer = false;
-            listContainer.removeAllViews();
+            clearCards();
         }
         if (legacyServer) {
             openUnscopedSessions();
@@ -215,15 +216,10 @@ public class ProjectListActivity extends Activity {
             }
         }), run.finish(new Api.StatusCb<CatalogSnapshot>() {
             @Override public void onResult(CatalogSnapshot snapshot) {
-                boolean changed = lastProjects == null || reportError
-                        || !existence.paths.equals(snapshot.existence.paths)
-                        || projectRowsChanged(snapshot.projects, snapshot.sessions);
                 existence = snapshot.existence;
-                if (changed) renderList(snapshot.projects, snapshot.sessions, null);
-                else {
-                    lastProjects = snapshot.projects;
-                    lastSessions = snapshot.sessions;
-                }
+                // Rebind fresh action models as well as visible fields. Unchanged
+                // content and row order leave existing views untouched.
+                renderList(snapshot.projects, snapshot.sessions, null);
             }
             @Override public void onError(String message) {
                 if (reportError && lastProjects == null) renderList(null, null, message);
@@ -238,22 +234,6 @@ public class ProjectListActivity extends Activity {
         })));
     }
 
-    private boolean projectRowsChanged(List<Project> projects, List<Session> sessions) {
-        if (lastProjects.size() != projects.size()) return true;
-        for (int i = 0; i < projects.size(); i++) {
-            Project before = lastProjects.get(i);
-            Project after = projects.get(i);
-            if (!before.id.equals(after.id)
-                    || before.sessionCount != after.sessionCount
-                    || !before.lastActiveAt.equals(after.lastActiveAt)
-                    || !before.name.equals(after.name)) return true;
-            String oldStatus = ProjectCards.aggregateStatus(before, lastSessions);
-            String newStatus = ProjectCards.aggregateStatus(after, sessions);
-            if (oldStatus == null ? newStatus != null : !oldStatus.equals(newStatus)) return true;
-        }
-        return false;
-    }
-
     /** Back-compat path: hand over to the unscoped session list and step aside. */
     private void openUnscopedSessions() {
         startActivity(new Intent(this, SessionListActivity.class));
@@ -264,16 +244,20 @@ public class ProjectListActivity extends Activity {
         lastProjects = null;
         lastSessions = null;
         projectCount.setText("not configured");
-        listContainer.removeAllViews();
+        clearCards();
         LinearLayout box = emptyBox("No server set.\nTap to configure the server address.");
         box.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
         listContainer.addView(box);
     }
 
-    private void renderList(List<Project> projects, List<Session> sessions, String error) {
+    private void clearCards() {
+        projectCards.clear();
         listContainer.removeAllViews();
+    }
 
+    private void renderList(List<Project> projects, List<Session> sessions, String error) {
         if (error != null) {
+            clearCards();
             lastProjects = null;
             lastSessions = null;
             projectCount.setText("unreachable");
@@ -286,14 +270,17 @@ public class ProjectListActivity extends Activity {
 
         int n = projects.size();
         String count = n + (n == 1 ? " project" : " projects");
-        projectCount.setText(count);
+        Widgets.bindText(projectCount, count);
 
         if (n == 0) {
+            clearCards();
             listContainer.addView(emptyBox("No projects yet.\nTap + New to start one."));
             return;
         }
 
-        for (Project p : projects) listContainer.addView(projectCard(p, sessions));
+        List<ProjectCards.Card> rows = projectCards.bind(projects, p -> p.id, this::projectCard,
+                (card, p) -> card.bind(p, sessions, existence));
+        CardViews.reconcile(listContainer, rows);
     }
 
     private LinearLayout emptyBox(String message) {
@@ -314,21 +301,9 @@ public class ProjectListActivity extends Activity {
         return box;
     }
 
-    private View projectCard(Project p, List<Session> allSessions) {
-        LinearLayout card = ProjectCards.build(this, p, allSessions, existence,
-                () -> openProject(p), () -> confirmDelete(p));
-
-        LinearLayout metaRow = Widgets.row(this);
-        String meta = p.sessionCount + (p.sessionCount == 1 ? " session" : " sessions");
-        String when = SessionListActivity.formatTime(p.lastActiveAt);
-        if (!when.isEmpty()) meta += "  ·  " + when;
-        TextView metaView = Widgets.text(this, meta, Theme.MUTED, 12.5f, false);
-        metaView.setLayoutParams(lp(0, WRAP, 1f));
-        metaRow.addView(metaView);
-        Widgets.margins(metaRow, 0, Theme.dp(this, 8), 0, 0);
-        card.addView(metaRow);
-
-        return card;
+    private ProjectCards.Card projectCard(Project p) {
+        return new ProjectCards.Card(this, this::openProject, this::confirmDelete,
+                0, "Delete project", true);
     }
 
     private void openProject(Project p) {

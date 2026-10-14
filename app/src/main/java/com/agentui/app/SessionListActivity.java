@@ -50,6 +50,9 @@ public class SessionListActivity extends Activity {
     private final RefreshController refresh = new RefreshController();
     private final RefreshController agentRefresh = new RefreshController();
     private CatalogRepository catalogs;
+    private final KeyedCards<Session, SessionCards.Card> sessionCards = new KeyedCards<>();
+    private View retainedWorktreeRow;
+    private TextView worktreeCount;
 
     /** Working directory this list is scoped to, or null when unscoped. */
     private String projectDir;
@@ -239,7 +242,7 @@ public class SessionListActivity extends Activity {
             dataIdentity = catalogs.identity();
             lastSessions = null;
             worktreesSupported = true;
-            listContainer.removeAllViews();
+            clearCards();
         }
         // A stopped Activity normally retains its cards. Do not decode cached
         // catalogs or rebuild those cards before the back transition can draw.
@@ -275,8 +278,9 @@ public class SessionListActivity extends Activity {
                 run.progress(new CatalogProgress() {
                     @Override public void sessions(List<Session> sessions) {
                         List<Session> fresh = scopeToProject(sessions);
-                        if (reportError || sessionStatusesChanged(fresh)) renderList(fresh, null);
-                        else lastSessions = fresh;
+                        // Binding refreshes action models too; unchanged fields do not
+                        // request layout, and unchanged rows remain attached.
+                        renderList(fresh, null);
                     }
                     @Override public void worktrees(List<Worktree> fresh) {
                         boolean changed = worktreeRowsChanged(fresh);
@@ -304,24 +308,6 @@ public class SessionListActivity extends Activity {
             Worktree before = worktrees.get(i), after = fresh.get(i);
             if (!before.id.equals(after.id) || !before.path.equals(after.path)
                     || !before.branch.equals(after.branch) || before.sessionCount != after.sessionCount) return true;
-        }
-        return false;
-    }
-
-    private boolean sessionStatusesChanged(List<Session> sessions) {
-        if (lastSessions == null || lastSessions.size() != sessions.size()) return true;
-        for (Session oldSession : lastSessions) {
-            Session current = null;
-            for (Session candidate : sessions) {
-                if (oldSession.id.equals(candidate.id)) {
-                    current = candidate;
-                    break;
-                }
-            }
-            if (current == null
-                    || !oldSession.status.equals(current.status)
-                    || !oldSession.worktreeId.equals(current.worktreeId)
-                    || !oldSession.workingDir.equals(current.workingDir)) return true;
         }
         return false;
     }
@@ -384,17 +370,24 @@ public class SessionListActivity extends Activity {
     }
 
     private void renderNeedsServer() {
+        lastSessions = null;
         sessionCount.setText("not configured");
-        listContainer.removeAllViews();
+        clearCards();
         LinearLayout box = emptyBox("No server set.\nTap to configure the server address.");
         box.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
         listContainer.addView(box);
     }
 
-    private void renderList(List<Session> sessions, String error) {
+    private void clearCards() {
+        sessionCards.clear();
+        retainedWorktreeRow = null;
+        worktreeCount = null;
         listContainer.removeAllViews();
+    }
 
+    private void renderList(List<Session> sessions, String error) {
         if (error != null) {
+            clearCards();
             lastSessions = null;
             sessionCount.setText("unreachable");
             listContainer.addView(emptyBox(error + "\n\nCheck the server address in Settings."));
@@ -404,20 +397,19 @@ public class SessionListActivity extends Activity {
         lastSessions = sessions;
         int n = sessions.size();
         String count = n + (n == 1 ? " session" : " sessions");
-        sessionCount.setText(count);
+        Widgets.bindText(sessionCount, count);
 
+        List<View> rows = new ArrayList<>();
         if (projectDir != null && projectIsRepo && worktreesSupported) {
-            listContainer.addView(worktreeRow());
+            if (retainedWorktreeRow == null) retainedWorktreeRow = worktreeRow();
+            Widgets.bindText(worktreeCount, worktrees.isEmpty() ? "none" : String.valueOf(worktrees.size()));
+            rows.add(retainedWorktreeRow);
         }
-
-        if (n == 0) {
-            listContainer.addView(emptyBox(projectDir != null
-                            ? "No sessions yet.\nTap + New to start one."
-                            : "No sessions yet"));
-            return;
-        }
-
-        for (Session s : sessions) listContainer.addView(sessionCard(s));
+        rows.addAll(sessionCards.bind(sessions, s -> s.id, this::sessionCard,
+                (card, s) -> card.bind(s, projectDir, agents, existence)));
+        if (n == 0) rows.add(emptyBox(projectDir != null
+                ? "No sessions yet.\nTap + New to start one." : "No sessions yet"));
+        CardViews.reconcile(listContainer, rows);
     }
 
     /**
@@ -442,7 +434,8 @@ public class SessionListActivity extends Activity {
         label.setLayoutParams(lp(0, WRAP, 1f));
         row.addView(label);
         int n = worktrees.size();
-        row.addView(Widgets.text(this, n == 0 ? "none" : String.valueOf(n), Theme.MUTED, 13, false));
+        worktreeCount = Widgets.text(this, n == 0 ? "none" : String.valueOf(n), Theme.MUTED, 13, false);
+        row.addView(worktreeCount);
         TextView chevron = Widgets.text(this, "›", Theme.FAINT, 18, false);
         Widgets.margins(chevron, Theme.dp(this, 10), 0, 0, 0);
         row.addView(chevron);
@@ -467,9 +460,8 @@ public class SessionListActivity extends Activity {
         return box;
     }
 
-    private View sessionCard(Session s) {
-        return SessionCards.build(this, s, projectDir, agents, existence,
-                () -> openSession(s), () -> showSessionMenu(s));
+    private SessionCards.Card sessionCard(Session s) {
+        return new SessionCards.Card(this, this::openSession, this::showSessionMenu);
     }
 
     private void openSession(Session s) {
