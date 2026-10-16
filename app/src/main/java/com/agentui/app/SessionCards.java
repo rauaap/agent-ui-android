@@ -50,8 +50,10 @@ final class SessionCards {
             addView(head);
 
             where = Widgets.row(context);
-            worktree = marker(context, "worktree", Theme.INFO);
-            former = marker(context, "former worktree", Theme.MUTED);
+            worktree = marker(context, "WT", Theme.INFO);
+            worktree.setContentDescription("Worktree");
+            former = marker(context, "FWT", Theme.MUTED);
+            former.setContentDescription("Former worktree");
             missing = marker(context, "missing", Theme.DANGER);
             where.addView(worktree);
             where.addView(former);

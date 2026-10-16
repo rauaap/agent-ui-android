@@ -903,11 +903,13 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         if (locationHolder == null) return;
         locationHolder.removeAllViews();
         if (!worktreeId.isEmpty()) {
-            TextView tag = Widgets.tag(this, "worktree", Theme.INFO);
+            TextView tag = Widgets.tag(this, "WT", Theme.INFO);
+            tag.setContentDescription("Worktree");
             Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
             locationHolder.addView(tag);
         } else if (Session.isFormerWorktree(worktreeId, workingDir, projectDir)) {
-            TextView tag = Widgets.tag(this, "former worktree", Theme.MUTED);
+            TextView tag = Widgets.tag(this, "FWT", Theme.MUTED);
+            tag.setContentDescription("Former worktree");
             Widgets.margins(tag, 0, 0, Theme.dp(this, 8), 0);
             locationHolder.addView(tag);
         }
