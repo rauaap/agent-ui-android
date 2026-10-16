@@ -206,7 +206,11 @@ public class SessionListActivity extends Activity {
         Widgets.margins(gear, 0, 0, Theme.dp(this, 8), 0);
         topbar.addView(gear);
 
-        TextView newBtn = Widgets.primaryButton(this, "+ New");
+        TextView newBtn = Widgets.primaryButton(this, "+");
+        newBtn.setPadding(0, 0, 0, 0);
+        newBtn.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
+        newBtn.setGravity(Gravity.CENTER);
+        newBtn.setContentDescription("New session");
         newBtn.setOnClickListener(v -> showNewSessionDialog());
         topbar.addView(newBtn);
 
@@ -432,7 +436,7 @@ public class SessionListActivity extends Activity {
                 (card, s) -> card.bind(s, projectDir, agents, existence)));
         if (n == 0) rows.add(emptyBox(hidden > 0
                 ? "No sessions within this cutoff.\nIncrease the days or switch off the filter."
-                : projectDir != null ? "No sessions yet.\nTap + New to start one." : "No sessions yet"));
+                : projectDir != null ? "No sessions yet.\nTap + to start one." : "No sessions yet"));
         CardViews.reconcile(listContainer, rows);
     }
 

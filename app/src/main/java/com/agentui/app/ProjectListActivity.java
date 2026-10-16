@@ -143,7 +143,11 @@ public class ProjectListActivity extends Activity {
         Widgets.margins(gear, 0, 0, Theme.dp(this, 8), 0);
         topbar.addView(gear);
 
-        TextView newBtn = Widgets.primaryButton(this, "+ New");
+        TextView newBtn = Widgets.primaryButton(this, "+");
+        newBtn.setPadding(0, 0, 0, 0);
+        newBtn.setLayoutParams(lp(Theme.dp(this, 44), Theme.dp(this, 44)));
+        newBtn.setGravity(Gravity.CENTER);
+        newBtn.setContentDescription("New project");
         newBtn.setOnClickListener(v -> showNewProjectDialog());
         topbar.addView(newBtn);
 
@@ -283,7 +287,7 @@ public class ProjectListActivity extends Activity {
 
         if (n == 0) {
             clearCards();
-            listContainer.addView(emptyBox("No projects yet.\nTap + New to start one."));
+            listContainer.addView(emptyBox("No projects yet.\nTap + to start one."));
             return;
         }
 
