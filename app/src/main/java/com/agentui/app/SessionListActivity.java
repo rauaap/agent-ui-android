@@ -5,6 +5,12 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StyleSpan;
+import android.graphics.Typeface;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -883,7 +889,7 @@ public class SessionListActivity extends Activity {
      */
     private void chooseWorktree(EditText nameField, TextView picker, String[] worktreeId) {
         List<CharSequence> labels = new ArrayList<>();
-        labels.add(PROJECT_DIRECTORY);
+        labels.add(worktreeChoiceLabel(PROJECT_DIRECTORY, projectDir, "", false));
         int checked = 0;
         List<Worktree> choices = new ArrayList<>(worktrees);
         for (int i = 0; i < choices.size(); i++) {
@@ -891,9 +897,6 @@ public class SessionListActivity extends Activity {
             labels.add(pickerLabel(w));
             if (w.id.equals(worktreeId[0])) checked = i + 1;
         }
-        final int newIndex = labels.size();
-        labels.add("New worktree…");
-
         new AlertDialog.Builder(this)
                 .setTitle("Run in")
                 .setSingleChoiceItems(twoLineChoices(labels), checked, (d, which) -> {
@@ -902,37 +905,56 @@ public class SessionListActivity extends Activity {
                         selectWorktree(picker, worktreeId, null);
                         return;
                     }
-                    if (which == newIndex) {
-                        // The session name is the branch seed, the same way it
-                        // seeds the name of everything else here.
-                        WorktreeForm.show(this, api, projectDir,
-                                nameField.getText().toString(), created -> {
-                                    mergeWorktree(created);
-                                    selectWorktree(picker, worktreeId, created);
-                                });
-                        return;
-                    }
                     Worktree w = choices.get(which - 1);
                     if (existence.missing(w.path)) confirmMissingDirectory(w, picker, worktreeId);
                     else selectWorktree(picker, worktreeId, w);
                 })
+                .setNeutralButton("New worktree", (d, which) ->
+                        WorktreeForm.show(this, api, projectDir,
+                                nameField.getText().toString(), created -> {
+                                    mergeWorktree(created);
+                                    selectWorktree(picker, worktreeId, created);
+                                }))
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
     /**
-     * The full path, then what is worth knowing about it. Sharing a worktree
+     * A short name, full path, then what is worth knowing about it. Sharing a worktree
      * with another session is a supported choice, so the session count is said
      * plainly rather than warned about.
      */
-    private String pickerLabel(Worktree w) {
-        String label = w.path;
+    private CharSequence pickerLabel(Worktree w) {
+        String name = new java.io.File(w.path).getName();
+        boolean missing = existence.missing(w.path);
         String subtitle = w.subtitle();
-        if (existence.missing(w.path)) {
+        if (missing) {
             subtitle = subtitle.isEmpty()
-                    ? "directory missing" : subtitle + "  ·  directory missing";
+                    ? "Directory missing" : subtitle + "  ·  directory missing";
         }
-        return subtitle.isEmpty() ? label : label + "\n" + subtitle;
+        return worktreeChoiceLabel(name, w.path, subtitle, missing);
+    }
+
+    private CharSequence worktreeChoiceLabel(String title, String path, String subtitle,
+                                            boolean missing) {
+        SpannableStringBuilder label = new SpannableStringBuilder(title);
+        label.setSpan(new StyleSpan(Typeface.BOLD), 0, label.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        int start = label.length();
+        label.append("\n").append(path);
+        label.setSpan(new RelativeSizeSpan(0.8f), start, label.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        label.setSpan(new ForegroundColorSpan(Theme.MUTED), start, label.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if (!subtitle.isEmpty()) {
+            start = label.length();
+            label.append("\n").append(subtitle);
+            label.setSpan(new RelativeSizeSpan(0.8f), start, label.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            label.setSpan(new ForegroundColorSpan(missing ? Theme.DANGER : Theme.MUTED),
+                    start, label.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return label;
     }
 
     /**
@@ -947,8 +969,15 @@ public class SessionListActivity extends Activity {
                 View row = super.getView(position, convertView, parent);
                 View text = row.findViewById(android.R.id.text1);
                 if (text instanceof TextView) {
-                    ((TextView) text).setSingleLine(false);
-                    ((TextView) text).setMaxLines(3);
+                    TextView label = (TextView) text;
+                    label.setSingleLine(false);
+                    label.setMaxLines(Integer.MAX_VALUE);
+                    label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+                    label.setTextColor(Theme.INK);
+                    label.setPadding(Theme.dp(SessionListActivity.this, 20),
+                            Theme.dp(SessionListActivity.this, 14),
+                            Theme.dp(SessionListActivity.this, 20),
+                            Theme.dp(SessionListActivity.this, 14));
                 }
                 return row;
             }
