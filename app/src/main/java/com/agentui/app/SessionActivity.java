@@ -46,7 +46,7 @@ import static com.agentui.app.Widgets.lp;
  * A single agent session: live transcript over a WebSocket plus a composer.
  * Mirrors the web "view-session" and its message protocol.
  */
-public class SessionActivity extends Activity {
+public class SessionActivity extends Activity implements SelectionQuote.Host {
 
     static final String EXTRA_ID = "id";
     static final String EXTRA_NAME = "name";
@@ -1970,6 +1970,22 @@ public class SessionActivity extends Activity {
         wrap.addView(bubble);
         append(wrap);
         agentBubble = bubble;
+    }
+
+    @Override public void quoteSelection(String text) {
+        android.text.Editable draft = input.getText();
+        int start = input.getSelectionStart();
+        int end = input.getSelectionEnd();
+        if (start < 0 || end < 0) start = end = draft.length();
+        int insertion = Math.min(start, end);
+        String quote = SelectionQuote.format(text);
+        draft.replace(insertion, Math.max(start, end), quote);
+        input.requestFocus();
+        input.setSelection(insertion + quote.length());
+        android.view.inputmethod.InputMethodManager keyboard =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.showSoftInput(input,
+                android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
     }
 
     private void copyToClipboard(String text) {

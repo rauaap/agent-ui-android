@@ -36,6 +36,7 @@ final class Widgets {
         t.setTextColor(color);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
         if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        SelectionQuote.install(t);
         return t;
     }
 
