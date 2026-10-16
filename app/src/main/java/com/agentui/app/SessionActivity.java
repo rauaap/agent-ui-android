@@ -1233,6 +1233,11 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             return;
         }
         if (requestCode != REQ_SETTINGS) return;
+        if (resultCode == RESULT_OK && data != null
+                && data.getBooleanExtra(SessionSettingsActivity.EXTRA_DELETED, false)) {
+            finish();
+            return;
+        }
         // The notification opt-in lives in Prefs; re-read it after settings close.
         notifyOn = api.prefs().notifyEnabled(sessionId);
         if (data != null) {

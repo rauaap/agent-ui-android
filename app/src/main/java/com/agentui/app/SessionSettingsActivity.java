@@ -1,6 +1,7 @@
 package com.agentui.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -31,6 +32,7 @@ import static com.agentui.app.Widgets.lp;
  */
 public class SessionSettingsActivity extends Activity {
 
+    static final String EXTRA_DELETED = "deleted";
     static final String EXTRA_ID = "id";
     static final String EXTRA_NAME = "name";
     static final String EXTRA_STATUS = "status";
@@ -383,11 +385,44 @@ public class SessionSettingsActivity extends Activity {
                     Theme.MUTED, 12.5f, false));
         }
 
+        addSection(form, "Delete session");
+        TextView deleteButton = Widgets.dangerButton(this, "Delete session");
+        deleteButton.setOnClickListener(v -> confirmDelete(deleteButton));
+        form.addView(deleteButton);
+
         scroll.addView(form);
         root.addView(scroll);
 
         renderState();
         return root;
+    }
+
+    private void confirmDelete(View button) {
+        String message = "Delete session \"" + sessionName + "\"? This removes its history.";
+        if (!worktreeId.isEmpty()) {
+            message += "\n\nThe worktree at " + workingDir + " stays where it is.";
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Delete session")
+                .setMessage(message)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (d, w) -> {
+                    button.setEnabled(false);
+                    api.deleteSession(sessionId, new Api.Cb<Void>() {
+                        @Override public void onResult(Void ignored) {
+                            WatchService.unwatch(SessionSettingsActivity.this, sessionId);
+                            Intent data = new Intent();
+                            data.putExtra(EXTRA_DELETED, true);
+                            setResult(RESULT_OK, data);
+                            finish();
+                        }
+                        @Override public void onError(String error) {
+                            button.setEnabled(true);
+                            toast("Unable to delete: " + error);
+                        }
+                    });
+                })
+                .show();
     }
 
     /* ---------------------------------------------------------------- */
