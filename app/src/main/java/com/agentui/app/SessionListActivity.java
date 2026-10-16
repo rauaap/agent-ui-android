@@ -498,17 +498,32 @@ public class SessionListActivity extends Activity {
 
     /**
      * The long-press menu. Copying the id comes first so it can be handed to
-     * another agent's session tools; delete repeats what the
-     * settings screen and the card's own bin already offer.
+     * another agent's session tools. Settings sits in the middle, with the
+     * destructive delete action last.
      */
     private void showSessionMenu(Session s) {
         new AlertDialog.Builder(this)
                 .setTitle(s.name)
-                .setItems(new String[] {"Copy session ID", "Delete…"}, (d, which) -> {
+                .setItems(new String[] {"Copy session ID", "Session settings", "Delete"}, (d, which) -> {
                     if (which == 0) Widgets.copyId(this, s.id, "Session");
+                    else if (which == 1) openSessionSettings(s);
                     else confirmDelete(s);
                 })
                 .show();
+    }
+
+    private void openSessionSettings(Session s) {
+        Intent i = new Intent(this, SessionSettingsActivity.class);
+        i.putExtra(SessionSettingsActivity.EXTRA_ID, s.id);
+        i.putExtra(SessionSettingsActivity.EXTRA_NAME, s.name);
+        i.putExtra(SessionSettingsActivity.EXTRA_STATUS, s.status);
+        i.putExtra(SessionSettingsActivity.EXTRA_AUTO_WRITE, s.autoApproveWrite);
+        i.putExtra(SessionSettingsActivity.EXTRA_AUTO_COMMAND, s.autoApproveCommand);
+        i.putExtra(SessionSettingsActivity.EXTRA_AUTO_INTER_AGENT, s.autoApproveInterAgent);
+        i.putExtra(SessionSettingsActivity.EXTRA_WORKING_DIR, s.workingDir);
+        i.putExtra(SessionSettingsActivity.EXTRA_PROJECT_DIR, projectDir);
+        i.putExtra(SessionSettingsActivity.EXTRA_WORKTREE_ID, s.worktreeId);
+        startActivity(i);
     }
 
     /* ---------------------------------------------------------------- */
