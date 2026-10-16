@@ -52,6 +52,29 @@ public class SearchResultReuseTest {
         return new Session(id, name, projectId, "/tree", "w", "pi", "idle", "", false, false);
     }
 
+    @Test public void togglingAgeRetainsProjectAndRestoresHiddenChildren() {
+        Project app = project("p", "/app", "Application");
+        Session old = new Session("a", "Old", "p", "/app", "", "pi", "idle",
+                "2020-01-01T00:00:00Z", false, false);
+        results.updateCatalog(List.of(app), List.of(old));
+        Group group = type("app");
+        results.setAgeDays(7); render();
+        assertSame(group, rows.get(0));
+        assertEquals(0, group.children.size());
+        assertEquals(1, results.hiddenCount());
+        List<ProjectSearch.Group> matches = results.matches();
+        results.setAgeDays(7);
+        assertSame(matches, results.matches());
+        results.setAgeDays(null); render();
+        assertSame(group, rows.get(0));
+        assertEquals(1, group.children.size());
+        assertEquals(0, results.hiddenCount());
+        results.setAgeDays(7);
+        type("old");
+        assertEquals(1, group.children.size());
+        assertEquals(0, results.hiddenCount());
+    }
+
     @Test public void typingWithinSameProjectMatchesDoesNotRecreateOrDetachCards() {
         Project app = project("p", "/app", "Application");
         results.updateCatalog(List.of(app), List.of(session("a", "One", "p"), session("b", "Two", "p")));

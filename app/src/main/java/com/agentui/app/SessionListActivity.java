@@ -45,6 +45,7 @@ public class SessionListActivity extends Activity {
     private Api api;
     private Prefs prefs;
     private TextView sessionCount;
+    private SessionVisibilityControl visibility;
     private LinearLayout listContainer;
     private ForegroundPoller statusPoller;
     private CatalogLoader loader;
@@ -121,6 +122,7 @@ public class SessionListActivity extends Activity {
         if (!prefs.isConfigured()) {
             renderNeedsServer();
         } else {
+            if (lastSessions != null) renderList(lastSessions, null);
             loadSessions();
             statusPoller.start();
         }
@@ -211,12 +213,17 @@ public class SessionListActivity extends Activity {
         root.addView(topbar);
         root.addView(divider());
 
+        visibility = new SessionVisibilityControl(this, prefs, () -> {
+            if (lastSessions != null) renderList(lastSessions, null);
+        });
+        root.addView(visibility);
+
         // ---- scrolling list ----
         ScrollView scroll = new ScrollView(this);
         scroll.setLayoutParams(lp(MATCH, 0, 1f));
         scroll.setFillViewport(true);
         listContainer = Widgets.column(this);
-        listContainer.setPadding(pad, pad, pad, pad);
+        listContainer.setPadding(pad, Theme.dp(this, 8), pad, pad);
         scroll.addView(listContainer);
         root.addView(scroll);
 
@@ -404,8 +411,15 @@ public class SessionListActivity extends Activity {
         }
 
         lastSessions = sessions;
-        int n = sessions.size();
-        String count = n + (n == 1 ? " session" : " sessions");
+        visibility.refresh();
+        List<Session> visible = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        for (Session session : sessions) {
+            if (SessionVisibility.visible(session, visibility.cutoff(), "", now)) visible.add(session);
+        }
+        int hidden = sessions.size() - visible.size();
+        int n = visible.size();
+        String count = n + (n == 1 ? " session" : " sessions") + (hidden > 0 ? " · " + hidden + " hidden" : "");
         Widgets.bindText(sessionCount, count);
 
         List<View> rows = new ArrayList<>();
@@ -414,10 +428,11 @@ public class SessionListActivity extends Activity {
             Widgets.bindText(worktreeCount, worktrees.isEmpty() ? "none" : String.valueOf(worktrees.size()));
             rows.add(retainedWorktreeRow);
         }
-        rows.addAll(sessionCards.bind(sessions, s -> s.id, this::sessionCard,
+        rows.addAll(sessionCards.bind(visible, s -> s.id, this::sessionCard,
                 (card, s) -> card.bind(s, projectDir, agents, existence)));
-        if (n == 0) rows.add(emptyBox(projectDir != null
-                ? "No sessions yet.\nTap + New to start one." : "No sessions yet"));
+        if (n == 0) rows.add(emptyBox(hidden > 0
+                ? "No sessions within this cutoff.\nIncrease the days or switch off the filter."
+                : projectDir != null ? "No sessions yet.\nTap + New to start one." : "No sessions yet"));
         CardViews.reconcile(listContainer, rows);
     }
 

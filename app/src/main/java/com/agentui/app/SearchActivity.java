@@ -123,11 +123,16 @@ public class SearchActivity extends Activity {
         query.setContentDescription("Search projects and sessions");
         input.addView(query);
         root.addView(input);
+        visibility = new SessionVisibilityControl(this, api.prefs(), () -> {
+            searchResults.setAgeDays(visibility.cutoff());
+            render();
+        });
+        root.addView(visibility);
 
         scroll = new ScrollView(this);
         scroll.setLayoutParams(lp(MATCH, 0, 1f));
         results = Widgets.column(this);
-        results.setPadding(pad, pad, pad, pad);
+        results.setPadding(pad, Theme.dp(this, 8), pad, pad);
         scroll.addView(results);
         root.addView(scroll);
         query.addTextChangedListener(new android.text.TextWatcher() {
@@ -142,6 +147,7 @@ public class SearchActivity extends Activity {
         return root;
     }
 
+    private SessionVisibilityControl visibility;
     private DirectorySnapshot existence = DirectorySnapshot.unknown();
 
     private void load() {
@@ -199,6 +205,7 @@ public class SearchActivity extends Activity {
     private boolean hasPopulatedData() { return projectsInitialized && sessionsInitialized; }
 
     private void catalogUpdated() {
+        searchResults.setAgeDays(visibility.cutoff());
         searchResults.updateCatalog(projects, sessions);
         contentUpdated();
     }
@@ -210,6 +217,8 @@ public class SearchActivity extends Activity {
     }
 
     private void render() {
+        visibility.refresh();
+        searchResults.setAgeDays(visibility.cutoff());
         List<View> rows = new ArrayList<>();
         if (searchResults.hasQuery()) {
             if (loading || error != null) {

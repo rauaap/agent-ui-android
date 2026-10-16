@@ -20,19 +20,32 @@ final class SearchResults<R, G, S extends R> {
     private final KeyedCards<ProjectSearch.Group, RetainedGroup> groups = new KeyedCards<>();
     private ProjectSearch.Index index = new ProjectSearch.Index(Collections.emptyList(), Collections.emptyList());
     private String query = "";
+    private Integer ageDays;
+
+    void setAgeDays(Integer days) {
+        if (java.util.Objects.equals(ageDays, days)) return;
+        ageDays = days;
+        matches = index.filter(query, ageDays, System.currentTimeMillis());
+    }
+
+    int hiddenCount() {
+        int count = 0;
+        for (ProjectSearch.Group group : matches) count += group.hidden;
+        return count;
+    }
     private List<ProjectSearch.Group> matches = Collections.emptyList();
 
     SearchResults(Adapter<R, G, S> adapter) { this.adapter = adapter; }
 
     void updateCatalog(List<Project> projects, List<Session> sessions) {
         index = new ProjectSearch.Index(projects, sessions);
-        matches = index.filter(query);
+        matches = index.filter(query, ageDays, System.currentTimeMillis());
     }
     void setQuery(String value) {
         String normalized = ProjectSearch.normalizeQuery(value);
         if (query.equals(normalized)) return;
         query = normalized;
-        matches = index.filter(query);
+        matches = index.filter(query, ageDays, System.currentTimeMillis());
     }
     boolean hasQuery() { return !query.isEmpty(); }
     List<ProjectSearch.Group> matches() { return matches; }

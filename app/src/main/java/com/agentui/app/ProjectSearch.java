@@ -42,6 +42,7 @@ final class ProjectSearch {
         final List<Session> sessions;
         /** Summary of ALL owned sessions, not just query-matching children. */
         final String status;
+        int hidden;
 
         Group(Project project, List<Session> sessions, String status) {
             this.project = project;
@@ -84,7 +85,9 @@ final class ProjectSearch {
             }
         }
 
-        List<Group> filter(String value) {
+        List<Group> filter(String value) { return filter(value, null, System.currentTimeMillis()); }
+
+        List<Group> filter(String value, Integer days, long now) {
             String query = normalizeQuery(value);
             if (query.isEmpty()) return Collections.emptyList();
             List<Group> groups = new ArrayList<>();
@@ -99,7 +102,13 @@ final class ProjectSearch {
                     }
                 }
                 if (projectMatches || !children.isEmpty()) {
-                    groups.add(new Group(bucket.project, children, bucket.status));
+                    List<Session> visible = new ArrayList<>();
+                    for (Session session : children) {
+                        if (SessionVisibility.visible(session, days, query, now)) visible.add(session);
+                    }
+                    Group group = new Group(bucket.project, visible, bucket.status);
+                    group.hidden = children.size() - visible.size();
+                    groups.add(group);
                 }
             }
             return groups;

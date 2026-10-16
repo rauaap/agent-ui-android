@@ -77,6 +77,13 @@ final class Prefs {
                 .apply();
     }
 
+    boolean sessionAgeEnabled() { return sp.getBoolean("session_age_enabled", false); }
+    int sessionAgeDays() { return sp.getInt("session_age_days", 30); }
+    void saveSessionAge(boolean enabled, int days) {
+        sp.edit().putBoolean("session_age_enabled", enabled)
+                .putInt("session_age_days", days).apply();
+    }
+
     boolean isConfigured() {
         return !host().trim().isEmpty();
     }

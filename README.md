@@ -141,7 +141,16 @@ Device smoke checks before release:
   preference is remembered per session **per server address**: ids are only unique
   within one backend, so pointing the app elsewhere starts from a clean set
   rather than inheriting whatever wore the same id there.
-- **Retained sessions** — all projects and sessions appear in ordinary lists.
+- **Session visibility** — project session lists and Search share a compact
+  single-row slider with unlabeled ticks and a linked exact day-count field.
+  Slider presets are 1–7, 14, 30, 60, 90 days, and ∞ (all sessions, the initial
+  setting). Typing a number preserves that exact cutoff; the slider moves to the
+  first preset at least that large. Tapping or dragging the slider replaces the
+  number with its preset, including ∞. The app remembers the selection.
+  Hidden counts explain filtered results; session-name search matches bypass
+  the inactivity cutoff. Projects and status summaries stay visible and complete;
+  nothing is deleted or closed.
+- **Retained sessions** — all projects and sessions remain in the catalog.
   Removing a worktree preserves attached sessions and their exact working
   directory as a `FORMER WORKTREE`. Missing paths are marked independently as
   `MISSING`; history and settings remain available, while attempts to run in a
