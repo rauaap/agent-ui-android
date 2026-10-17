@@ -1647,6 +1647,10 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
     /* transcript rendering                                             */
     /* ---------------------------------------------------------------- */
 
+    private void finishEventCard(LinearLayout card) {
+        ((EventCardLayout) card).setEventId(renderingEventId);
+    }
+
     private LinearLayout.LayoutParams rowParams() {
         LinearLayout.LayoutParams p = lp(MATCH, WRAP);
         p.bottomMargin = Theme.dp(this, 14);
@@ -1751,7 +1755,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             View row = entry.getValue();
             if (row.getTag() instanceof ToolCards.Tag && row instanceof LinearLayout) {
                 LinearLayout card = (LinearLayout) row;
-                if (card.getChildAt(card.getChildCount() - 1).getVisibility() == View.VISIBLE) {
+                if (((EventCardLayout) card).lastContentChild().getVisibility() == View.VISIBLE) {
                     expandedTools.add(entry.getKey());
                 }
             }
@@ -1795,7 +1799,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
     private void addUserMessage(String text, List<ImageAttachment> images) {
         LinearLayout wrap = Widgets.column(this);
         wrap.setGravity(Gravity.END);
-        LinearLayout bubble = Widgets.column(this);
+        LinearLayout bubble = new EventCardLayout(this, true);
         bubble.setBackground(Theme.rounded(this, Theme.ACCENT_SOFT, 16, Theme.ACCENT_LINE, 1));
         int p = Theme.dp(this, 12);
         bubble.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
@@ -1805,6 +1809,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             bubble.addView(body, lp(WRAP, WRAP));
         }
         addImages(bubble, images);
+        finishEventCard(bubble);
         wrap.addView(bubble, lp(WRAP, WRAP));
         append(wrap);
     }
@@ -1815,7 +1820,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
      * user bubble — it is input, not this agent's Markdown output.
      */
     private void addAgentMessage(String text, InterAgent.Source source, List<ImageAttachment> images) {
-        LinearLayout content = Widgets.column(this);
+        LinearLayout content = new EventCardLayout(this, true);
 
         LinearLayout head = Widgets.row(this);
         // The sender row wraps inside a weighted column, so a long name shrinks
@@ -1843,6 +1848,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         Runnable render = () -> renderSender(sender, source);
         render.run();
         if (source.kind == InterAgent.Source.Kind.AGENT) directoryViews.add(render);
+        finishEventCard(content);
         append(agentMessageBox(content));
     }
 
@@ -1943,7 +1949,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             if (agentRaw == null) agentRaw = new StringBuilder();
             agentRaw.append(text);
             Markdown.renderInto(agentBubble, agentRaw.toString());
-            rememberRow((View) agentBubble.getParent());
+            rememberRow((View) agentBubble.getParent().getParent());
             return;
         }
         // The raw markdown is kept verbatim: the bubble shows the rendered form,
@@ -1971,10 +1977,13 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
 
         LinearLayout bubble = Widgets.column(this);
         Markdown.renderInto(bubble, raw.toString());
-        bubble.setBackground(Theme.rounded(this, Theme.PANEL, 16, Theme.LINE, 1));
+        LinearLayout frame = new EventCardLayout(this, true);
+        frame.addView(bubble);
+        finishEventCard(frame);
+        frame.setBackground(Theme.rounded(this, Theme.PANEL, 16, Theme.LINE, 1));
         int p = Theme.dp(this, 12);
-        bubble.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
-        wrap.addView(bubble);
+        frame.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
+        wrap.addView(frame);
         append(wrap);
         agentBubble = bubble;
     }
@@ -2030,7 +2039,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             return;
         }
 
-        LinearLayout wrap = Widgets.column(this);
+        LinearLayout wrap = new EventCardLayout(this);
         wrap.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
 
         LinearLayout head = Widgets.row(this);
@@ -2092,21 +2101,25 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         wrap.addView(body);
         // Found again by call id when this call's approval arrives.
         wrap.setTag(new ToolCards.Tag(callId));
+        finishEventCard(wrap);
         append(wrap);
     }
 
     private void addUnsupportedToolEvent(JSONObject event, boolean legacy) {
-        LinearLayout card = Widgets.column(this);
+        LinearLayout card = new EventCardLayout(this);
         card.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
         int p = Theme.dp(this, 12);
         card.setPadding(p, p, p, p);
         String notice = legacy ? "Legacy event from an older server version"
                 : "Unsupported or malformed tool action";
-        card.addView(Widgets.text(this, notice, Theme.AWAITING, 12, true));
+        LinearLayout head = Widgets.row(this);
+        head.addView(Widgets.text(this, notice, Theme.AWAITING, 12, true), lp(0, WRAP, 1f));
+        card.addView(head);
         TextView raw = Widgets.mono(this, prettyJson(event), Theme.MUTED, 12f);
         raw.setTextIsSelectable(true);
         Widgets.margins(raw, 0, Theme.dp(this, 8), 0, 0);
         card.addView(raw);
+        finishEventCard(card);
         append(card);
     }
 
@@ -2154,7 +2167,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
      * @param result the {@code bash_output} payload, or null while it runs
      */
     private LinearLayout bashCard(String command, JSONObject result) {
-        LinearLayout wrap = Widgets.column(this);
+        LinearLayout wrap = new EventCardLayout(this);
         wrap.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.DANGER_LINE, 1));
 
         LinearLayout head = Widgets.row(this);
@@ -2182,7 +2195,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
 
         boolean waiting = result == null;
         TextView out = Widgets.mono(this,
-                waiting ? "running…" : bashBody(result),
+                waiting ? "" : bashBody(result),
                 waiting ? Theme.FAINT : 0xFFD4CFE0, 12.5f);
         out.setTextIsSelectable(true);
         HorizontalScrollView body = new HorizontalScrollView(this);
@@ -2192,12 +2205,13 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         body.setBackgroundColor(0x40000000);
         wrap.addView(body);
 
-        if (result != null) {
-            TextView meta = Widgets.text(this, bashStatus(result),
-                    bashFailed(result) ? Theme.DANGER : Theme.FAINT, 11, false);
-            meta.setPadding(hp, Theme.dp(this, 6), hp, Theme.dp(this, 8));
-            wrap.addView(meta);
-        }
+        // Reserve the same footer from the start, so the event ID never
+        // takes width away from the output pane while the command is running.
+        TextView meta = Widgets.text(this, waiting ? "running…" : bashStatus(result),
+                !waiting && bashFailed(result) ? Theme.DANGER : Theme.FAINT, 11, false);
+        meta.setPadding(hp, Theme.dp(this, 6), hp, Theme.dp(this, 8));
+        wrap.addView(meta);
+        finishEventCard(wrap);
         return wrap;
     }
 
@@ -2286,7 +2300,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         View replacedTool = toolIndex >= 0 ? transcript.getChildAt(toolIndex) : null;
         if (toolIndex >= 0) transcript.removeViewAt(toolIndex);
 
-        LinearLayout card = Widgets.column(this);
+        LinearLayout card = new EventCardLayout(this);
         if (replacedTool != null) {
             eventRows.replaceAll((eventId, row) -> row == replacedTool ? card : row);
         }
@@ -2380,6 +2394,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             LinearLayout.LayoutParams mp = lp(WRAP, WRAP);
             mp.topMargin = Theme.dp(this, 10);
             card.addView(marker, mp);
+            finishEventCard(card);
             place(card, toolIndex);
             // Not pending: the paired approval_response (auto) is a no-op since
             // we never set pendingApprovalId.
@@ -2389,6 +2404,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         View buttons = buildApprovalButtons(id, options, card);
         card.addView(buttons);
         card.setTag(buttons); // remember the button container for finalize()
+        finishEventCard(card);
 
         place(card, toolIndex);
         pendingApprovalCard = card;
@@ -2632,7 +2648,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             if (q != null) qs.add(q);
         }
 
-        LinearLayout card = Widgets.column(this);
+        LinearLayout card = new EventCardLayout(this);
         card.setBackground(Theme.rounded(this, Theme.withAlpha(Theme.INFO, 0x18), 14,
                 Theme.withAlpha(Theme.INFO, 0x66), 1));
         int p = Theme.dp(this, 14);
@@ -2640,7 +2656,9 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
 
         TextView tag = Widgets.text(this, "QUESTION", Theme.INFO, 11, true);
         tag.setLetterSpacing(0.06f);
-        card.addView(tag);
+        LinearLayout head = Widgets.row(this);
+        head.addView(tag, lp(0, WRAP, 1f));
+        card.addView(head);
 
         final QuestionCard qc = new QuestionCard(id);
         final boolean fastPath = qs.size() == 1 && !qs.get(0).optBoolean("multiSelect", false);
@@ -2792,6 +2810,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
 
         card.setTag(qc);
         restyle.run(); // set the initial (disabled) Submit state
+        finishEventCard(card);
         append(card);
         pendingQuestionCard = card;
         pendingQuestionId = id;
@@ -2924,7 +2943,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
     }
 
     private void addError(String message) {
-        LinearLayout wrap = Widgets.column(this);
+        LinearLayout wrap = new EventCardLayout(this);
         TextView labelView = Widgets.text(this, "ERROR", Theme.DANGER, 11, true);
         labelView.setLetterSpacing(0.07f);
         Widgets.margins(labelView, 0, 0, 0, Theme.dp(this, 5));
@@ -2934,8 +2953,11 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         int p = Theme.dp(this, 12);
         text.setPadding(p, p, p, p);
         text.setLayoutParams(lp(MATCH, WRAP));
-        wrap.addView(labelView);
+        LinearLayout head = Widgets.row(this);
+        head.addView(labelView, lp(0, WRAP, 1f));
+        wrap.addView(head);
         wrap.addView(text);
+        finishEventCard(wrap);
         append(wrap);
     }
 
