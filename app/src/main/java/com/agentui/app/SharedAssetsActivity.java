@@ -230,7 +230,7 @@ public class SharedAssetsActivity extends Activity {
         form.addView(Widgets.fieldLabel(this, "Absolute server directory"));
         EditText path = Widgets.field(this, "/home/user/notes", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS, true);
-        path.setText(initial == null ? "" : initial.path);
+        path.setText(initial == null ? (projectPath == null ? "" : projectPath) : initial.path);
         form.addView(path);
         form.addView(note("No ~ or environment-variable expansion. The directory need not exist yet."));
         TextView error = Widgets.text(this, "", Theme.DANGER, 12.5f, false);
