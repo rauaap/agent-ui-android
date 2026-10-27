@@ -211,6 +211,42 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
     private long renderingEventId;
     private boolean rebuildingHistory;
     private boolean historyFailedAtTop;
+    // Model output still being generated. Drafts are transient socket state:
+    // they never enter scrollback and are restored from the server's snapshot
+    // on every (re)connect.
+    private final StreamDrafts drafts = new StreamDrafts();
+    // Rows of generated blocks, drafts and finals alike, by source position:
+    // within a turn they keep ordinal order however the blocks complete.
+    // Rows that never streamed have none and keep their arrival order.
+    private final java.util.Map<View, StreamDrafts.Position> streamPositions = new java.util.HashMap<>();
+    // Finished streamed text rows, so the next block of the same turn joins
+    // the bubble as consecutive output always has.
+    private final java.util.Map<View, OutputBubble> streamBubbles = new java.util.HashMap<>();
+    private final java.util.Map<String, DraftRow> draftRows = new java.util.HashMap<>();
+    // Deltas update the model in order at once; their rows redraw in batches.
+    private final java.util.Set<DraftRow> dirtyDrafts = new java.util.LinkedHashSet<>();
+    private final Runnable flushDrafts = this::flushDrafts;
+    private boolean draftFlushPosted;
+    private static final long DRAFT_REDRAW_MS = 50;
+    private int resyncAttempt;
+
+    /** A draft's transcript row and how to redraw it from the draft's current content. */
+    private static final class DraftRow {
+        final StreamDrafts.Draft draft;
+        final View view;
+        final Runnable render;
+        final TextView agentLabel; // text drafts only
+        final Runnable directoryRender; // session tools only
+
+        DraftRow(StreamDrafts.Draft draft, View view, Runnable render,
+                 TextView agentLabel, Runnable directoryRender) {
+            this.draft = draft;
+            this.view = view;
+            this.render = render;
+            this.agentLabel = agentLabel;
+            this.directoryRender = directoryRender;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -407,6 +443,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         SessionState.get(api, sessionId).connection(false);
         cancelReconnect();
         cancelFileReconnect();
+        cancelDraftRedraw();
         if (socket != null) {
             socket.close(1000, null);
             socket = null;
@@ -1340,6 +1377,13 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         // Likewise the queue: the replay re-accepts and re-ships, then the
         // input_queue snapshot settles what is still pending.
         messageQueue.clear();
+        // Drafts likewise come back whole in the replay's stream_snapshot. A
+        // buffered reconnect leaves the old rows frozen in the old transcript
+        // until the swap; unbuffered, nothing is on screen worth keeping.
+        if (firstConnect) {
+            for (DraftRow row : draftRows.values()) detachDraftRow(row);
+        }
+        resetDrafts();
 
         if (firstConnect) {
             // First open: stream the replay straight into the (empty) visible
@@ -1443,8 +1487,24 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         } catch (Exception e) {
             return;
         }
+        // Transient frames bypass scrollback: it is the durable rendering log
+        // that history rebuilds replay, and must never hold token updates.
+        if (isStreamFrame(msg.optString("type", ""))) {
+            firstConnect = false;
+            applyStreamFrame(msg);
+            return;
+        }
         if (!scrollback.accept(msg)) return;
         renderMessage(msg);
+    }
+
+    private static boolean isStreamFrame(String type) {
+        switch (type) {
+            case "stream_start": case "stream_delta": case "stream_snapshot": case "stream_remove":
+                return true;
+            default:
+                return false;
+        }
     }
 
     private void renderMessage(JSONObject msg) {
@@ -1498,12 +1558,41 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
                 }
                 renderPending();
                 break;
-            case "output":
-                addAgentOutput(msg.optString("text", ""));
+            case "output": {
+                StreamDrafts.Position position;
+                try {
+                    position = StreamDrafts.finalPosition(msg);
+                } catch (IllegalArgumentException e) {
+                    agentBubble = null;
+                    addUnsupportedEvent(msg, "Malformed streaming metadata on output");
+                    break;
+                }
+                if (position == null) {
+                    addAgentOutput(msg.optString("text", ""));
+                } else {
+                    // Streamed blocks join by source position, not arrival.
+                    agentBubble = null;
+                    agentRaw = null;
+                    addStreamOutput(msg.optString("text", ""), position, retireStream(position));
+                }
                 break;
-            case "tool_use":
+            }
+            case "tool_use": {
                 agentBubble = null;
-                addToolUse(msg);
+                StreamDrafts.Position position;
+                try {
+                    position = StreamDrafts.finalPosition(msg);
+                } catch (IllegalArgumentException e) {
+                    addUnsupportedEvent(msg, "Malformed streaming metadata on tool call");
+                    break;
+                }
+                View row = addToolUse(msg, position == null ? -1 : retireStream(position));
+                if (position != null && row != null) streamPositions.put(row, position);
+                break;
+            }
+            case "stream_interrupted":
+                agentBubble = null;
+                addInterrupted(msg);
                 break;
             case "approval_request":
                 agentBubble = null;
@@ -1662,6 +1751,15 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         rememberRow(v);
     }
 
+    /** The row index for a generated block: in source order among its turn's rows. */
+    private int streamIndex(StreamDrafts.Position position) {
+        List<StreamDrafts.Position> rows = new ArrayList<>(transcript.getChildCount());
+        for (int i = 0; i < transcript.getChildCount(); i++) {
+            rows.add(streamPositions.get(transcript.getChildAt(i)));
+        }
+        return StreamDrafts.insertionIndex(rows, position);
+    }
+
     private void rememberRow(View v) {
         if (renderingEventId > 0) eventRows.put(renderingEventId, v);
     }
@@ -1693,7 +1791,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             case "input": case "inputs_shipped": case "output": case "tool_use":
             case "approval_request": case "approval_response": case "question":
             case "question_response": case "bash_input": case "bash_output":
-            case "done": case "error": return true;
+            case "done": case "error": case "stream_interrupted": return true;
             default: return false;
         }
     }
@@ -1760,11 +1858,24 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
                 }
             }
         }
+        // Drafts are live state, not history: carry their rows over unchanged
+        // rather than rebuilding them, and keep a reader anchored on one.
+        View draftAnchor = null;
+        List<DraftRow> liveDrafts = new ArrayList<>();
+        for (StreamDrafts.Draft draft : drafts.ordered()) {
+            DraftRow row = draftRows.get(draft.streamId);
+            if (row == null || row.view.getParent() != transcript) continue;
+            if (row.view == anchor) draftAnchor = anchor;
+            liveDrafts.add(row);
+        }
+        for (DraftRow row : liveDrafts) transcript.removeView(row.view);
         MessageQueue liveQueue = messageQueue;
         messageQueue = new MessageQueue();
         rebuildingHistory = true;
         transcript = newTranscript();
         eventRows.clear();
+        streamPositions.clear();
+        streamBubbles.clear();
         directoryViews.clear();
         agentLabelViews.clear();
         agentBubble = null;
@@ -1781,13 +1892,20 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
             messageQueue = liveQueue;
             rebuildingHistory = false;
         }
+        for (DraftRow row : liveDrafts) {
+            StreamDrafts.Position position = StreamDrafts.position(row.draft);
+            transcript.addView(row.view, streamIndex(position), rowParams());
+            streamPositions.put(row.view, position);
+            if (row.agentLabel != null) agentLabelViews.add(row.agentLabel);
+            if (row.directoryRender != null) directoryViews.add(row.directoryRender);
+        }
         for (Long id : expandedTools) {
             View row = eventRows.get(id);
             if (row != null && row.getTag() instanceof ToolCards.Tag) {
                 ((LinearLayout) row).getChildAt(0).performClick();
             }
         }
-        View replacement = eventRows.get(anchorId);
+        View replacement = draftAnchor != null ? draftAnchor : eventRows.get(anchorId);
         scroll.removeAllViews();
         scroll.addView(transcript);
         if (replacement != null) scroll.preserveHistoryAnchor(replacement, offset);
@@ -1954,9 +2072,26 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         }
         // The raw markdown is kept verbatim: the bubble shows the rendered form,
         // but the Copy button (and any re-render as chunks stream in) uses this.
-        final StringBuilder raw = new StringBuilder(text);
-        agentRaw = raw;
+        OutputBubble out = outputRow(new StringBuilder(text));
+        agentRaw = out.raw;
+        append(out.row);
+        agentBubble = out.bubble;
+    }
 
+    /** An agent message row, its Markdown column, and the raw text it shows. */
+    private static final class OutputBubble {
+        final View row;
+        final LinearLayout bubble;
+        final StringBuilder raw;
+
+        OutputBubble(View row, LinearLayout bubble, StringBuilder raw) {
+            this.row = row;
+            this.bubble = bubble;
+            this.raw = raw;
+        }
+    }
+
+    private OutputBubble outputRow(StringBuilder raw) {
         LinearLayout wrap = Widgets.column(this);
 
         LinearLayout labelRow = Widgets.row(this);
@@ -1984,8 +2119,7 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         int p = Theme.dp(this, 12);
         frame.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
         wrap.addView(frame);
-        append(wrap);
-        agentBubble = bubble;
+        return new OutputBubble(wrap, bubble, raw);
     }
 
     @Override public void quoteSelection(String text) {
@@ -2031,12 +2165,16 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         return b;
     }
 
-    private void addToolUse(JSONObject event) {
+    /**
+     * A completed tool call's card, placed at {@code index} (-1 appends).
+     * Returns the card, or null when the event was shown as unsupported.
+     */
+    private View addToolUse(JSONObject event, int index) {
         CanonicalAction action = CanonicalAction.parse(event.optJSONObject("action"));
         String callId = strictString(event, "call_id");
         if (action == null || callId == null || callId.isEmpty()) {
             addUnsupportedToolEvent(event, !event.has("action"));
-            return;
+            return null;
         }
 
         LinearLayout wrap = new EventCardLayout(this);
@@ -2102,16 +2240,20 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         // Found again by call id when this call's approval arrives.
         wrap.setTag(new ToolCards.Tag(callId));
         finishEventCard(wrap);
-        append(wrap);
+        place(wrap, index);
+        return wrap;
     }
 
     private void addUnsupportedToolEvent(JSONObject event, boolean legacy) {
+        addUnsupportedEvent(event, legacy ? "Legacy event from an older server version"
+                : "Unsupported or malformed tool action");
+    }
+
+    private void addUnsupportedEvent(JSONObject event, String notice) {
         LinearLayout card = new EventCardLayout(this);
         card.setBackground(Theme.rounded(this, Theme.PANEL, 10, Theme.LINE, 1));
         int p = Theme.dp(this, 12);
         card.setPadding(p, p, p, p);
-        String notice = legacy ? "Legacy event from an older server version"
-                : "Unsupported or malformed tool action";
         LinearLayout head = Widgets.row(this);
         head.addView(Widgets.text(this, notice, Theme.AWAITING, 12, true), lp(0, WRAP, 1f));
         card.addView(head);
@@ -2121,6 +2263,352 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         card.addView(raw);
         finishEventCard(card);
         append(card);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* streaming drafts                                                 */
+    /* ---------------------------------------------------------------- */
+
+    private void applyStreamFrame(JSONObject msg) {
+        String type = msg.optString("type", "");
+        // Transient frames have no event id; nothing built here may claim one.
+        renderingEventId = 0;
+        StreamDrafts.Outcome outcome = StreamDrafts.Outcome.APPLIED;
+        try {
+            switch (type) {
+                case "stream_snapshot":
+                    restoreDrafts(drafts.replace(msg));
+                    break;
+                case "stream_start":
+                    outcome = drafts.start(msg);
+                    if (outcome == StreamDrafts.Outcome.APPLIED) {
+                        addDraftRow(drafts.get(msg.optJSONObject("draft").optString("stream_id")));
+                    }
+                    break;
+                case "stream_delta":
+                    outcome = drafts.delta(msg);
+                    if (outcome == StreamDrafts.Outcome.APPLIED) {
+                        scheduleDraftRedraw(draftRows.get(msg.optString("stream_id")));
+                    }
+                    break;
+                case "stream_remove":
+                    // An empty placeholder retires without a durable row; an
+                    // unknown one has nothing left to clear.
+                    removeDraftRow(drafts.retire(StreamDrafts.removal(msg)));
+                    break;
+                default:
+                    break;
+            }
+        } catch (IllegalArgumentException e) {
+            agentBubble = null;
+            addError("Unsupported " + type + " frame: " + e.getMessage());
+            // A lost update leaves every later one unappliable, and a rejected
+            // snapshot leaves no authoritative drafts at all: resubscribe.
+            resync();
+            return;
+        }
+        if (outcome == StreamDrafts.Outcome.DESYNC) resync();
+    }
+
+    /**
+     * Retire the draft a durable final or interrupted event completes, and
+     * return the row index that event takes: its draft's own slot, else its
+     * source position among the rows of its turn already shown.
+     */
+    private int retireStream(StreamDrafts.Position position) {
+        // History rebuilds replay finals whose drafts are long gone.
+        if (!rebuildingHistory) {
+            StreamDrafts.Draft draft = drafts.retire(position.streamId);
+            if (draft != null) {
+                resyncAttempt = 0;
+                DraftRow row = draftRows.get(draft.streamId);
+                int index = row != null && row.view.getParent() == transcript
+                        ? transcript.indexOfChild(row.view) : -1;
+                removeDraftRow(draft);
+                if (index >= 0) return index;
+            }
+        }
+        return streamIndex(position);
+    }
+
+    /**
+     * A finished streamed text block. It joins a bubble holding the directly
+     * preceding or following block of its turn, as consecutive output always
+     * has; otherwise it starts its own at its source position.
+     */
+    private void addStreamOutput(String text, StreamDrafts.Position position, int index) {
+        if (text.isEmpty()) return;
+        View before = index > 0 ? transcript.getChildAt(index - 1) : null;
+        View after = index < transcript.getChildCount() ? transcript.getChildAt(index) : null;
+        View joined = null;
+        if (before != null && streamBubbles.containsKey(before)
+                && StreamDrafts.adjacent(streamPositions.get(before), position)) {
+            joined = before;
+            streamBubbles.get(joined).raw.append(text);
+            streamPositions.get(joined).last = position.last;
+        } else if (after != null && streamBubbles.containsKey(after)
+                && StreamDrafts.adjacent(position, streamPositions.get(after))) {
+            joined = after;
+            streamBubbles.get(joined).raw.insert(0, text);
+            streamPositions.get(joined).first = position.first;
+        }
+        if (joined != null) {
+            OutputBubble out = streamBubbles.get(joined);
+            Markdown.renderInto(out.bubble, out.raw.toString());
+            rememberRow(joined);
+            return;
+        }
+        OutputBubble out = outputRow(new StringBuilder(text));
+        place(out.row, index);
+        streamPositions.put(out.row, position);
+        streamBubbles.put(out.row, out);
+    }
+
+    /**
+     * Local drafts no longer match the server: a revision gap, or an update
+     * for a draft this client never saw. Resubscribe for authoritative history
+     * and a snapshot rather than guessing. Repeats back off like reconnects.
+     */
+    private void resync() {
+        if (!active || socket == null) return;
+        WebSocket stale = socket;
+        socket = null;
+        stale.cancel();
+        SessionState.get(api, sessionId).connection(false);
+        cancelReconnect();
+        long delay = resyncAttempt == 0 ? 0
+                : Math.min(1000L * (1L << Math.min(resyncAttempt - 1, 4)), 10000L);
+        resyncAttempt++;
+        reconnectRunnable = this::connect;
+        handler.postDelayed(reconnectRunnable, delay);
+    }
+
+    /** A snapshot replaces every draft row with the server's current set. */
+    private void restoreDrafts(List<StreamDrafts.Draft> restored) {
+        for (DraftRow row : draftRows.values()) detachDraftRow(row);
+        draftRows.clear();
+        cancelDraftRedraw();
+        for (StreamDrafts.Draft draft : restored) addDraftRow(draft);
+    }
+
+    /** Insert a draft's row at its source position among its turn's rows. */
+    private void addDraftRow(StreamDrafts.Draft draft) {
+        DraftRow row = draft.tool ? toolDraftRow(draft, null) : textDraftRow(draft, null);
+        StreamDrafts.Position position = StreamDrafts.position(draft);
+        transcript.addView(row.view, streamIndex(position), rowParams());
+        draftRows.put(draft.streamId, row);
+        streamPositions.put(row.view, position);
+    }
+
+    private void removeDraftRow(StreamDrafts.Draft draft) {
+        if (draft == null) return;
+        DraftRow row = draftRows.remove(draft.streamId);
+        if (row == null) return;
+        dirtyDrafts.remove(row);
+        streamPositions.remove(row.view);
+        if (row.view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) row.view.getParent()).removeView(row.view);
+        }
+        agentLabelViews.remove(row.agentLabel);
+        directoryViews.remove(row.directoryRender);
+    }
+
+    private void detachDraftRow(DraftRow row) {
+        if (row.view.getParent() == transcript) transcript.removeView(row.view);
+        streamPositions.remove(row.view);
+        agentLabelViews.remove(row.agentLabel);
+        directoryViews.remove(row.directoryRender);
+    }
+
+    private void resetDrafts() {
+        drafts.clear();
+        draftRows.clear();
+        streamPositions.clear();
+        streamBubbles.clear();
+        cancelDraftRedraw();
+    }
+
+    private void scheduleDraftRedraw(DraftRow row) {
+        if (row == null) return;
+        dirtyDrafts.add(row);
+        if (draftFlushPosted) return;
+        draftFlushPosted = true;
+        handler.postDelayed(flushDrafts, DRAFT_REDRAW_MS);
+    }
+
+    private void flushDrafts() {
+        draftFlushPosted = false;
+        List<DraftRow> rows = new ArrayList<>(dirtyDrafts);
+        dirtyDrafts.clear();
+        for (DraftRow row : rows) row.render.run();
+    }
+
+    private void cancelDraftRedraw() {
+        handler.removeCallbacks(flushDrafts);
+        draftFlushPosted = false;
+        dirtyDrafts.clear();
+    }
+
+    /** A durable {@code stream_interrupted}: the cut-off draft, kept and never actionable. */
+    private void addInterrupted(JSONObject msg) {
+        StreamDrafts.Draft draft;
+        try {
+            draft = StreamDrafts.interrupted(msg);
+        } catch (IllegalArgumentException e) {
+            addUnsupportedEvent(msg, "Unsupported interrupted output: " + e.getMessage());
+            return;
+        }
+        StreamDrafts.Position position = StreamDrafts.position(draft);
+        int index = retireStream(position);
+        String reason = msg.optString("reason");
+        DraftRow row = draft.tool ? toolDraftRow(draft, reason) : textDraftRow(draft, reason);
+        place(row.view, index);
+        streamPositions.put(row.view, position);
+    }
+
+    private TextView draftState(String interrupted) {
+        TextView state = Widgets.text(this, interrupted == null ? "GENERATING…"
+                        : "INTERRUPTED · " + interrupted.toUpperCase(Locale.ROOT),
+                interrupted == null ? Theme.FAINT : Theme.AWAITING, 10.5f, true);
+        state.setLetterSpacing(0.06f);
+        Widgets.margins(state, Theme.dp(this, 8), 0, 0, 0);
+        return state;
+    }
+
+    /**
+     * Assistant text being generated, or cut off when {@code interrupted}
+     * names why. It renders like a finished bubble through the same Markdown
+     * path, but stands alone: the final output replaces it.
+     */
+    private DraftRow textDraftRow(StreamDrafts.Draft draft, String interrupted) {
+        LinearLayout wrap = Widgets.column(this);
+
+        LinearLayout labelRow = Widgets.row(this);
+        Widgets.margins(labelRow, 0, 0, 0, Theme.dp(this, 5));
+        TextView labelView = Widgets.text(this, agentChatLabel(), Theme.ACCENT_STRONG, 11, true);
+        labelView.setLetterSpacing(0.07f);
+        labelRow.addView(labelView);
+        labelRow.addView(draftState(interrupted), lp(0, WRAP, 1f));
+        TextView copyBtn = Widgets.text(this, "COPY", Theme.FAINT, 11, true);
+        copyBtn.setLetterSpacing(0.06f);
+        int cbp = Theme.dp(this, 6);
+        copyBtn.setPadding(cbp, Theme.dp(this, 2), cbp, Theme.dp(this, 2));
+        copyBtn.setClickable(true);
+        copyBtn.setOnClickListener(v -> copyToClipboard(draft.content.toString()));
+        labelRow.addView(copyBtn);
+        wrap.addView(labelRow);
+
+        LinearLayout bubble = Widgets.column(this);
+        LinearLayout frame = new EventCardLayout(this, true);
+        frame.addView(bubble);
+        frame.setBackground(Theme.rounded(this, Theme.PANEL, 16, interrupted == null
+                ? Theme.LINE_SOFT : Theme.withAlpha(Theme.AWAITING, 0x66), 1));
+        int p = Theme.dp(this, 12);
+        frame.setPadding(p + Theme.dp(this, 2), p, p + Theme.dp(this, 2), p);
+        wrap.addView(frame);
+
+        Runnable render = () -> Markdown.renderInto(bubble, draft.content.toString());
+        render.run();
+        finishEventCard(frame);
+        agentLabelViews.add(labelView);
+        return new DraftRow(draft, wrap, render, labelView, null);
+    }
+
+    /**
+     * A tool call whose arguments are being generated, or were cut off. Read
+     * only: it is never tagged as the call's tool card, so no approval or
+     * question attaches to it, and it has no controls of its own. A message to
+     * another session grows in plain view; other arguments stay collapsed.
+     */
+    private DraftRow toolDraftRow(StreamDrafts.Draft draft, String interrupted) {
+        LinearLayout wrap = new EventCardLayout(this);
+        wrap.setBackground(Theme.rounded(this, Theme.PANEL, 10, interrupted == null
+                ? Theme.LINE_SOFT : Theme.withAlpha(Theme.AWAITING, 0x66), 1));
+
+        LinearLayout head = Widgets.row(this);
+        int hp = Theme.dp(this, 11);
+        head.setPadding(hp, Theme.dp(this, 9), hp, Theme.dp(this, 9));
+        head.setClickable(true);
+        TextView caret = Widgets.text(this, "▸", Theme.FAINT, 11, false);
+        Widgets.margins(caret, 0, 0, Theme.dp(this, 8), 0);
+        TextView nameView = Widgets.text(this, ToolPreview.title(draft.name), Theme.INFO, 11, true);
+        nameView.setLetterSpacing(0.04f);
+        Widgets.margins(nameView, 0, 0, Theme.dp(this, 8), 0);
+        TextView summary = Widgets.mono(this, "", Theme.MUTED, 12.5f);
+        summary.setMaxLines(1);
+        summary.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        head.addView(caret);
+        head.addView(nameView);
+        head.addView(summary, lp(0, WRAP, 1f));
+        head.addView(draftState(interrupted));
+        wrap.addView(head);
+
+        String tool = InterAgent.sessionTool(draft.name);
+        TextView message = null;
+        View messageBox = null;
+        if (tool != null && !InterAgent.READ_SESSION.equals(tool)) {
+            message = Widgets.text(this, "", Theme.INK, 14, false);
+            message.setTextIsSelectable(true);
+            messageBox = agentMessageBox(message);
+            LinearLayout.LayoutParams mLp = lp(MATCH, WRAP);
+            mLp.setMargins(hp, 0, hp, Theme.dp(this, 11));
+            wrap.addView(messageBox, mLp);
+        }
+
+        TextView arguments = Widgets.mono(this, "", 0xFFD4CFE0, 12.5f);
+        arguments.setTextIsSelectable(true);
+        HorizontalScrollView body = new HorizontalScrollView(this);
+        body.addView(arguments, lp(WRAP, WRAP));
+        int bp = Theme.dp(this, 12);
+        body.setPadding(bp, bp, bp, bp);
+        body.setBackgroundColor(0x40000000);
+        body.setVisibility(View.GONE);
+        wrap.addView(body);
+
+        final TextView messageView = message;
+        final View messageFrame = messageBox;
+        Runnable render = () -> {
+            JSONObject preview = draft.preview;
+            if (tool == null) {
+                setGrowingText(summary, ToolPreview.summary(preview));
+            } else if (ToolPreview.awaitingTarget(tool, preview)) {
+                summary.setText(InterAgent.MESSAGE_SESSION.equals(tool) ? "→ composing…" : "composing…");
+            } else {
+                renderSessionSummary(summary, tool, preview);
+            }
+            if (messageView != null) {
+                String text = InterAgent.message(tool, preview);
+                setGrowingText(messageView, text);
+                messageFrame.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+            }
+            // Collapsed arguments cost nothing to keep current.
+            if (body.getVisibility() == View.VISIBLE) {
+                setGrowingText(arguments, ToolPreview.body(preview, draft.content.toString()));
+            }
+        };
+        head.setOnClickListener(v -> {
+            scroll.release();
+            boolean open = body.getVisibility() == View.VISIBLE;
+            body.setVisibility(open ? View.GONE : View.VISIBLE);
+            caret.setText(open ? "▸" : "▾");
+            render.run();
+        });
+        render.run();
+        finishEventCard(wrap);
+        Runnable directoryRender = tool == null ? null : render;
+        if (directoryRender != null) directoryViews.add(directoryRender);
+        return new DraftRow(draft, wrap, render, null, directoryRender);
+    }
+
+    /**
+     * Show {@code text}, appending when it only grew so a selection made in
+     * the streaming text survives the update.
+     */
+    private static void setGrowingText(TextView view, String text) {
+        String current = view.getText().toString();
+        if (current.equals(text)) return;
+        if (!current.isEmpty() && text.startsWith(current)) view.append(text.substring(current.length()));
+        else view.setText(text);
     }
 
     /* ---------------------------------------------------------------- */
@@ -2303,6 +2791,8 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         LinearLayout card = new EventCardLayout(this);
         if (replacedTool != null) {
             eventRows.replaceAll((eventId, row) -> row == replacedTool ? card : row);
+            StreamDrafts.Position position = streamPositions.remove(replacedTool);
+            if (position != null) streamPositions.put(card, position);
         }
         if (auto) {
             card.setBackground(Theme.rounded(this, Theme.PANEL, 14, Theme.LINE, 1));
@@ -2811,7 +3301,20 @@ public class SessionActivity extends Activity implements SelectionQuote.Host {
         card.setTag(qc);
         restyle.run(); // set the initial (disabled) Submit state
         finishEventCard(card);
-        append(card);
+        // The question tool's completed call came first as a read-only card;
+        // like an approval, the request takes its place so the call shows once.
+        // Questions recorded before call_id existed are simply appended.
+        final int toolIndex = ToolCards.indexOf(
+                i -> transcript.getChildAt(i).getTag(), transcript.getChildCount(),
+                strictString(msg, "call_id"));
+        if (toolIndex >= 0) {
+            View replacedTool = transcript.getChildAt(toolIndex);
+            transcript.removeViewAt(toolIndex);
+            eventRows.replaceAll((eventId, row) -> row == replacedTool ? card : row);
+            StreamDrafts.Position position = streamPositions.remove(replacedTool);
+            if (position != null) streamPositions.put(card, position);
+        }
+        place(card, toolIndex);
         pendingQuestionCard = card;
         pendingQuestionId = id;
 

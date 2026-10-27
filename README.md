@@ -254,6 +254,8 @@ Key sources under `app/src/main/java/com/agentui/app/`:
 | `WorktreeListActivity.java` | one project's worktrees: list / create / remove |
 | `WorktreeForm.java`        | the create-worktree dialog, shared by the picker and that list |
 | `SessionActivity.java`     | per-session transcript + composer + WebSocket |
+| `StreamDrafts.java`        | transient model-output drafts: strict frames, revisions, snapshots, source order (pure, unit tested) |
+| `ToolPreview.java`         | display text for provisional tool arguments; never validated or actionable (pure, unit tested) |
 | `SessionSettingsActivity.java` | per-session settings: rename, notification opt-in, reasoning level, auto-approve toggles |
 | `ProjectSettingsActivity.java` | per-project settings: sandbox paths, network, shared assets |
 | `SettingsActivity.java`    | server address + projects directory form (persisted) |
@@ -543,23 +545,29 @@ server -> client : { type: "status",           status }   # idle | running | awa
                    { type: "input",            message_id, text, source, delivery }  # "queued"
                    { type: "inputs_shipped",   messages: [{ message_id, text, source, delivery }] }
                    { type: "input_queue",      messages: [{ message_id, text, source, delivery }] }
-                   { type: "output",           text }
+                   { type: "output",           text, stream_id?, turn_id?, ordinal? }
                    { type: "bash_input",       command }
                    { type: "bash_output",      command, stdout, stderr, exit_code,
                                                duration_ms, timed_out, truncated }
-                   { type: "tool_use",         call_id, action }
+                   { type: "tool_use",         call_id, action, stream_id?, turn_id?, ordinal? }
                    { type: "approval_request", request_id, call_id, action, options,
                                                auto_approved? }
                    { type: "approval_response", request_id, behavior, auto? }
-                   { type: "question",         request_id, questions }
+                   { type: "question",         request_id, call_id, questions }
                    { type: "question_response", request_id, answers }
+                   { type: "stream_interrupted", draft, reason }  # cancelled | error | retry | incomplete
+                   { type: "stream_start",     draft }                       # transient
+                   { type: "stream_delta",     stream_id, revision, delta, arguments_preview? }  # transient
+                   { type: "stream_snapshot",  drafts: [draft] }             # transient
+                   { type: "stream_remove",    stream_id }                   # transient
                    { type: "settings",         auto_approve_write, auto_approve_command }
                    { type: "done" }
                    { type: "error",            message }
 ```
 
-WebSocket initialization is persisted transcript replay, then `input_queue`,
-then `status`, followed by live publications. There is no worktree-removal
+WebSocket initialization is persisted transcript replay, then exactly one
+`stream_snapshot`, then `input_queue`, then `status`, followed by live
+publications. There is no worktree-removal
 frame; polling the REST session catalog updates saved paths and associations.
 
 **Message queue.** Every ordinary message, the user's or another agent's, goes
@@ -578,10 +586,36 @@ the app ignores a message it has already shown. Replayed `input` rows without
 restart keep pending messages until the next idle submission ships them along
 with it; there is no edit or cancel.
 
+**Model output streaming.** A draft is one assistant content block still being
+generated: `{ stream_id, turn_id, ordinal, revision, kind: "text", text }` or
+`{ …, kind: "tool", call_id, name, arguments_json, arguments_preview }`. The
+`stream_*` frames are transient: they have no `event_id`, bypass the scrollback
+log that history prepends rebuild from, and their rows are read-only views of
+the `StreamDrafts` model. Within a turn, every generated row — draft, final or
+interrupted — keeps `ordinal` (source) order, not completion order: a final
+takes its draft's slot, or else goes ahead of the first later row of its turn;
+adjacent text blocks of a turn share one bubble. Rows without streaming metadata
+keep their arrival order. A delta appends
+its native fragment to the text or raw argument JSON and **replaces** the tool
+preview; views redraw in ~50 ms batches. Each delta must be the draft's next
+`revision`: an older or repeated one is ignored, while a gap or an unknown
+`stream_id` means the client is out of step, so it drops the socket and
+resubscribes for history and a fresh snapshot (backing off on repeats); so
+does any malformed `stream_*` frame. The snapshot is validated whole, replaces
+every draft, is built offscreen with a reconnect's replay and
+swaps in at `status`. A final `output`/`tool_use`, a durable `stream_interrupted`
+(shown labelled, never actionable) or `stream_remove` (an empty placeholder)
+retires its draft by `stream_id`; finals still render standalone in history. A
+history prepend carries live draft rows over unchanged. Tool previews never pass
+through canonical validation and have no controls; a session tool's message
+grows in plain view, and a missing `session_id` reads as composing.
+
 `question` / `question_response` cover Claude Code's **AskUserQuestion** tool — a
 multiple-choice prompt the client renders as selectable options, sending the
 pick back as `answers` (keyed by question text; a label, or array of labels for
-`multiSelect`). Claude only.
+`multiSelect`). The question tool's completed `tool_use` arrives first as an
+ordinary read-only card; the `question`, correlated by `call_id`, takes its
+place so the call shows once, and only it carries controls.
 
 Tool calls and approvals carry the same provider-neutral canonical `action`,
 discriminated by `action.kind`: `command`, `read`, `edit`, `write`, `search`,

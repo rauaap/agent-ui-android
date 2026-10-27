@@ -16,7 +16,7 @@ android {
         // Bump explicitly with `make bump-version`, then commit this value.
         versionCode 30
         // Base name; release.gradle derives "<base>.<versionCode>" for releases.
-        versionName '1.4-build'
+        versionName '1.5-build'
     }
 
     buildTypes {
