@@ -42,7 +42,12 @@ final class WorktreeForm {
      *                   branch field starts as a slug of it
      */
     static void show(Activity a, Api api, String projectPath, String branchSeed, OnPicked cb) {
-        final String template = api.prefs().worktreeTemplate();
+        CreationSettings.load(a, api,
+                settings -> showLoaded(a, api, projectPath, branchSeed, cb, settings.template));
+    }
+
+    private static void showLoaded(Activity a, Api api, String projectPath, String branchSeed,
+                                   OnPicked cb, String template) {
         // The project's worktrees, for flagging a colliding path as the branch
         // is typed rather than after a round trip. Loaded in the background: an
         // empty list only costs the pre-emption, and the 409 still catches it.

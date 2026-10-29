@@ -25,6 +25,8 @@ import okhttp3.ResponseBody;
 /**
  * Thin REST client for the agent backend. All callbacks are delivered on the
  * main thread. Mirrors the web front-end's fetch() calls:
+ *   GET    /settings
+ *   PATCH  /settings
  *   GET    /agents
  *   GET    /usage
  *   GET    /sandbox-paths
@@ -134,6 +136,18 @@ final class Api {
     void getUsage(Cb<Usage> cb) {
         Request req = new Request.Builder().url(prefs.httpBase() + "/usage").get().build();
         enqueue(req, cb, body -> Usage.from(new JSONObject(body), System.currentTimeMillis()));
+    }
+
+    /** Always fetched directly; templates are server-owned, not catalog data. */
+    void getSettings(Cb<ServerSettings> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/settings").get().build();
+        enqueue(req, cb, body -> ServerSettings.from(new JSONObject(body)));
+    }
+
+    void saveSettings(JSONObject patch, Cb<ServerSettings> cb) {
+        Request req = new Request.Builder().url(prefs.httpBase() + "/settings")
+                .patch(RequestBody.create(patch.toString(), JSON)).build();
+        enqueue(req, cb, body -> ServerSettings.from(new JSONObject(body)));
     }
 
     void getSandboxPaths(Cb<List<SandboxPath>> cb) {

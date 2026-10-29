@@ -39,6 +39,11 @@ public class SettingsActivity extends Activity {
     private EditText templateField;
     private TextView preview;
     private TextView templatePreview;
+    private TextView templateSave;
+    private Api templateApi;
+    private ServerSettings loadedSettings;
+    private boolean templateLoaded;
+    private boolean templateBusy;
     private TextView defaultAgentField;
     private String defaultAgentId;
     private final List<Agent> agents = new ArrayList<>();
@@ -54,11 +59,11 @@ public class SettingsActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = new Prefs(this);
-        defaultAgentId = prefs.defaultAgent();
         setContentView(buildRoot());
         updatePreview();
         updateTemplatePreview();
         loadAgents();
+        loadTemplate();
     }
 
 
@@ -164,10 +169,11 @@ public class SettingsActivity extends Activity {
         form.addView(preview);
 
         // ---- defaults for new work ----
-        addSection(form, "Defaults");
+        addSection(form, "Server defaults (saved separately)");
 
         form.addView(label("Agent"));
         defaultAgentField = selector(defaultAgentLabel());
+        defaultAgentField.setEnabled(false);
         defaultAgentField.setOnClickListener(v -> chooseDefaultAgent());
         form.addView(defaultAgentField);
         form.addView(hint("Preselected whenever you start a session. Server default follows "
@@ -175,19 +181,23 @@ public class SettingsActivity extends Activity {
 
         form.addView(spacer(20));
         form.addView(label("Projects directory"));
-        defaultDirField = field(prefs.defaultDir(), "/projects/", InputType.TYPE_CLASS_TEXT
+        defaultDirField = field("", "Loading server settings…", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_URI, true);
+        defaultDirField.setEnabled(false);
+        defaultDirField.setSaveEnabled(false);
         form.addView(defaultDirField);
         form.addView(hint("Pre-filled when you start a new project. Sessions take their "
                 + "directory from the project they are in.", Theme.MUTED));
 
         form.addView(spacer(20));
         form.addView(label("Worktree path template"));
-        templateField = field(prefs.worktreeTemplate(), WorktreePath.DEFAULT_TEMPLATE,
+        templateField = field("", "Loading server settings…",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI, true);
+        templateField.setEnabled(false);
+        templateField.setSaveEnabled(false);
         form.addView(templateField);
-        form.addView(hint("Fills in the directory when you create a worktree; you can still "
-                + "edit it there.", Theme.MUTED));
+        form.addView(hint("Shared by all clients on the saved server. Saved separately below; "
+                + "you can still edit the directory when creating a worktree.", Theme.MUTED));
         TextView legend = Widgets.mono(this,
                 "%P  the project's parent directory\n"
                         + "%N  the project directory's own name\n"
@@ -203,6 +213,14 @@ public class SettingsActivity extends Activity {
         templatePreview.setPadding(pp, pp, pp, pp);
         templatePreview.setLayoutParams(lp(MATCH, WRAP));
         form.addView(templatePreview);
+        templateSave = Widgets.ghostButton(this, "Loading server settings…");
+        templateSave.setEnabled(false);
+        templateSave.setOnClickListener(v -> {
+            if (templateBusy) return;
+            if (!templateLoaded) { loadTemplate(); return; }
+            saveTemplate();
+        });
+        form.addView(templateSave);
 
         // ---- other screens ----
         // These navigate away and save on their own, so they sit apart from
@@ -260,7 +278,7 @@ public class SettingsActivity extends Activity {
         root.addView(footerDiv);
         LinearLayout footer = Widgets.column(this);
         footer.setPadding(pad, Theme.dp(this, 12), pad, Theme.dp(this, 12));
-        TextView save = Widgets.primaryButton(this, "Save");
+        TextView save = Widgets.primaryButton(this, "Save connection");
         save.setMinimumHeight(Theme.dp(this, 48));
         save.setLayoutParams(lp(MATCH, WRAP));
         save.setOnClickListener(v -> save());
@@ -303,6 +321,10 @@ public class SettingsActivity extends Activity {
     }
 
     private void updateTemplatePreview() {
+        if (!templateLoaded) {
+            templatePreview.setText("Server template not loaded.");
+            return;
+        }
         String template = templateField.getText().toString();
         templatePreview.setText("Example — project " + EXAMPLE_PROJECT
                 + ", branch " + EXAMPLE_BRANCH + ":\n"
@@ -329,11 +351,8 @@ public class SettingsActivity extends Activity {
         if (token.isEmpty()) { toast("Server token is required"); return; }
         boolean tls = tlsSwitch.isChecked();
         String base = (tls ? "https://" : "http://") + host + ":" + port;
-        String directory = defaultDirField.getText().toString();
-        String agent = defaultAgentId;
-        String template = templateField.getText().toString();
         Runnable persist = () -> {
-            prefs.save(host, port, tls, directory, agent, template);
+            prefs.save(host, port, tls);
             prefs.saveToken(token);
             Auth.saved();
             toast("Saved");
@@ -363,6 +382,83 @@ public class SettingsActivity extends Activity {
         }, "token-validation").start();
     }
 
+    private void loadTemplate() {
+        if (!prefs.isConfigured()) {
+            templatePreview.setText("Save a server connection, then reopen Settings to edit server defaults.");
+            return;
+        }
+        templateApi = new Api(this);
+        templateBusy = true;
+        templateSave.setEnabled(false);
+        templateApi.getSettings(new Api.Cb<ServerSettings>() {
+            @Override public void onResult(ServerSettings settings) {
+                if (isFinishing() || isDestroyed()) return;
+                templateBusy = false;
+                templateLoaded = true;
+                applySettings(settings);
+                setServerFieldsEnabled(true);
+                templateSave.setText("Save server settings");
+                templateSave.setEnabled(true);
+                updateTemplatePreview();
+            }
+            @Override public void onError(String message) {
+                if (isFinishing() || isDestroyed()) return;
+                templateBusy = false;
+                templatePreview.setText("Unable to load server settings: " + message);
+                templateSave.setText("Retry loading server settings");
+                templateSave.setEnabled(true);
+                toast(message);
+            }
+        });
+    }
+
+    private void saveTemplate() {
+        if (!hostField.getText().toString().trim().equals(prefs.host())
+                || !portField.getText().toString().trim().equals(String.valueOf(prefs.port()))
+                || tlsSwitch.isChecked() != prefs.tls()
+                || !tokenField.getText().toString().trim().equals(prefs.token())) {
+            toast("Save the server connection first, then reopen Settings.");
+            return;
+        }
+        templateBusy = true;
+        templateSave.setEnabled(false);
+        setServerFieldsEnabled(false);
+        templateApi.saveSettings(loadedSettings.changes(templateField.getText().toString(),
+                defaultDirField.getText().toString(), defaultAgentId), new Api.Cb<ServerSettings>() {
+            @Override public void onResult(ServerSettings settings) {
+                if (isFinishing() || isDestroyed()) return;
+                done();
+                applySettings(settings);
+                toast("Server settings saved");
+            }
+            @Override public void onError(String message) {
+                if (isFinishing() || isDestroyed()) return;
+                done();
+                toast(message);
+            }
+            private void done() {
+                templateBusy = false;
+                templateSave.setEnabled(true);
+                setServerFieldsEnabled(true);
+            }
+        });
+    }
+
+    private void setServerFieldsEnabled(boolean enabled) {
+        templateField.setEnabled(enabled);
+        defaultDirField.setEnabled(enabled);
+        defaultAgentField.setEnabled(enabled);
+    }
+
+    private void applySettings(ServerSettings settings) {
+        loadedSettings = settings;
+        templateField.setText(settings.template);
+        defaultDirField.setText(settings.directory);
+        defaultAgentId = settings.agent;
+        defaultAgentField.setText(defaultAgentLabel());
+        updateTemplatePreview();
+    }
+
     /** Fill the chooser from the configured server; "Server default" needs no answer. */
     private void loadAgents() {
         if (!prefs.isConfigured()) return;
@@ -390,7 +486,7 @@ public class SettingsActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Default agent")
                 .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                    defaultAgentId = which == 0 ? "" : choices.get(which - 1).id;
+                    defaultAgentId = which == 0 ? null : choices.get(which - 1).id;
                     defaultAgentField.setText(defaultAgentLabel());
                     dialog.dismiss();
                 })

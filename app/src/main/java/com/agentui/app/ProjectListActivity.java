@@ -360,6 +360,10 @@ public class ProjectListActivity extends Activity {
             return;
         }
 
+        CreationSettings.load(this, api, this::showNewProjectDialogLoaded);
+    }
+
+    private void showNewProjectDialogLoaded(ServerSettings settings) {
         LinearLayout content = Widgets.column(this);
         int pad = Theme.dp(this, 20);
         content.setPadding(pad, pad, pad, pad);
@@ -374,7 +378,7 @@ public class ProjectListActivity extends Activity {
 
         content.addView(fieldLabel("Working directory"));
         EditText dirField = field("/projects/my-project", true);
-        dirField.setText(prefs.defaultDir());
+        dirField.setText(settings.directory);
         dirField.setSelection(dirField.getText().length());
         content.addView(dirField);
 
@@ -394,7 +398,7 @@ public class ProjectListActivity extends Activity {
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
                 if (dirEdited[0]) return;
                 programmatic[0] = true;
-                String dir = underProjectsDir(s.toString());
+                String dir = settings.directoryFor(s.toString());
                 dirField.setText(dir);
                 dirField.setSelection(dir.length());
                 programmatic[0] = false;
@@ -469,13 +473,6 @@ public class ProjectListActivity extends Activity {
         int slash = path.lastIndexOf('/');
         String name = slash >= 0 ? path.substring(slash + 1) : path;
         return name.isEmpty() ? path : name;
-    }
-
-    /** The configured projects directory with {@code name} appended. */
-    private String underProjectsDir(String name) {
-        String base = prefs.defaultDir().trim();
-        if (base.isEmpty()) base = "/projects/";
-        return base.endsWith("/") ? base + name : base + "/" + name;
     }
 
     private TextView fieldLabel(String s) {

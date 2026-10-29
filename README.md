@@ -170,17 +170,27 @@ Device smoke checks before release:
   refreshes about once a minute while open, and every countdown is recomputed
   from the reset time that arrived with that read rather than ticked down
   locally. A server without the endpoint says so.
-- **Settings** — the server host / port (and optional TLS), the projects
-  directory, and the worktree path template are stored in `SharedPreferences`,
-  so they **persist across app restarts and device reboots**. Set them via the ⚙
+- **Settings** — the server host / port (and optional TLS), token, and other
+  device preferences remain local and **persist across app restarts and device
+  reboots**. The projects directory, preferred agent, and worktree path template
+  are shared server state. Settings and each new-project, new-session, and
+  new-worktree form fetch defaults freshly using `GET /settings`.
+  **Save server settings** sends only edited fields via `PATCH /settings`:
+  `default_working_directory`, `default_agent`, and `worktree_path_template`.
+  Choosing **Server default** sends explicit `default_agent: null` to use the
+  default advertised by `GET /agents`. **Save connection** saves only the local
+  connection. Fetch/save failures are displayed, without a local/default fallback;
+  old device directory, agent, and template values are neither read nor migrated.
+  Set preferences via the ⚙
   button on the project list. The ⚙ always opens the settings for what is on
   screen: the server's from the project list, a project's from its session list,
   a session's from its transcript. The template takes `%P` (the project's parent
   directory), `%N` (the project directory's own name), `%B` (the branch with
   slashes flattened to dashes) and `%b` (the branch verbatim); the default
   `%P/%N-%B` puts the worktree beside the project, and a live example shows what
-  it expands to. It is expanded entirely client-side — the server only ever
-  receives a finished absolute path.
+  it expands to. Expansion stays entirely client-side — worktree creation still
+  sends the finished absolute path, project path, and branch to `POST /worktrees`.
+  The server stores template text only, without token validation or expansion.
 
 - **Sandbox paths** — open **Settings ▸ Server sandbox paths** for shared defaults,
   or **Project settings ▸ Project sandbox paths** for additions and overrides.

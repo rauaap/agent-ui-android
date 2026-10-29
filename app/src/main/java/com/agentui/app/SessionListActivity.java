@@ -613,6 +613,10 @@ public class SessionListActivity extends Activity {
             return;
         }
 
+        CreationSettings.load(this, api, this::showNewSessionDialogLoaded);
+    }
+
+    private void showNewSessionDialogLoaded(ServerSettings settings) {
         LinearLayout content = Widgets.column(this);
         int pad = Theme.dp(this, 20);
         content.setPadding(pad, pad, pad, pad);
@@ -642,7 +646,7 @@ public class SessionListActivity extends Activity {
         final List<Agent> choices = new ArrayList<>(agents);
         final CharSequence[] agentLabels = new CharSequence[choices.size()];
         for (int i = 0; i < choices.size(); i++) agentLabels[i] = choices.get(i).name;
-        final int[] agentIdx = {Agent.defaultIndex(choices, prefs.defaultAgent())};
+        final int[] agentIdx = {Agent.defaultIndex(choices, settings.agent)};
         android.widget.Switch sandbox = new android.widget.Switch(this);
         sandbox.setText("Sandbox");
         sandbox.setTextColor(Theme.INK);
@@ -777,7 +781,7 @@ public class SessionListActivity extends Activity {
                     toast("Name is required");
                     return;
                 }
-                String dir = projectDir != null ? projectDir : fallbackDir(name);
+                String dir = projectDir != null ? projectDir : settings.directoryFor(name);
 
                 creating[0] = true;
                 refreshCreate.run();
@@ -1034,17 +1038,6 @@ public class SessionListActivity extends Activity {
         t.setLayoutParams(lp(MATCH, WRAP));
         t.setClickable(true);
         return t;
-    }
-
-    /**
-     * Working directory for a session created from the unscoped list: the
-     * configured projects directory plus the session name, the same shape the
-     * name-tracking directory field used to produce.
-     */
-    private String fallbackDir(String name) {
-        String base = prefs.defaultDir().trim();
-        if (base.isEmpty()) base = "/projects/";
-        return base.endsWith("/") ? base + name : base + "/" + name;
     }
 
     private TextView fieldLabel(String s) {
